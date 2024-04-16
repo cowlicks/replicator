@@ -136,27 +136,27 @@ pub async fn onpeer<T: HcTraits + 'static>(
             start: 0,
             length: info.contiguous_length,
         };
-        println!("{who} sending through channel sync {sync_msg:?} and range {range_msg:?}");
+        info!("{who} sending through channel sync {sync_msg:?} and range {range_msg:?}");
         channel
             .send_batch(&[Message::Synchronize(sync_msg), Message::Range(range_msg)])
             .await?;
-        println!("{who} send range and sync");
+        info!("{who} send range and sync");
     } else {
-        println!("\n{who} sending sync {sync_msg:?}\n");
+        info!("\n{who} sending sync {sync_msg:?}\n");
         channel.send(Message::Synchronize(sync_msg)).await.unwrap();
-        println!("\n{who} sent sync msg\n");
+        info!("\n{who} sent sync msg\n");
     }
-    println!("{who} listen to channel");
+    info!("{who} listen to channel");
 
     let who = who.to_string();
     // this needed to run in background so message loop over protocol stream can continue along
     // side this
     spawn(async move {
         while let Some(message) = channel.next().await {
-            println!("\n{who} got message: {message}\n");
+            info!("\n{who} got message: {message}\n");
             let result = onmessage(core.clone(), &mut peer_state, &mut channel, message).await;
             if let Err(e) = result {
-                println!("protocol error: {}", e);
+                info!("protocol error: {}", e);
                 break;
             }
         }
@@ -200,7 +200,7 @@ async fn onmessage<T: HcTraits>(
 ) -> Result<(), ReplicatorError> {
     match message {
         Message::Synchronize(message) => {
-            println!("Got Synchronize message {message:?}");
+            info!("Got Synchronize message {message:?}");
             let length_changed = message.length != peer_state.remote_length;
             let first_sync = !peer_state.remote_synced;
             let info = r!(core).info();
@@ -250,7 +250,7 @@ async fn onmessage<T: HcTraits>(
             channel.send_batch(&messages).await?;
         }
         Message::Request(message) => {
-            println!("Got Request message {message:?}");
+            info!("Got Request message {message:?}");
             let (info, proof) = {
                 let proof = r!(core)
                     .create_proof(message.block, message.hash, message.seek, message.upgrade)
@@ -272,7 +272,7 @@ async fn onmessage<T: HcTraits>(
             }
         }
         Message::Data(message) => {
-            println!("Got Data message {message:?}");
+            info!("Got Data message {message:?}");
             let (_old_info, _applied, new_info, request_block) = {
                 let old_info = r!(core).info();
                 let proof = message.clone().into_proof();
@@ -308,19 +308,13 @@ async fn onmessage<T: HcTraits>(
 
                 // If all have been replicated, print the result
                 if new_info.contiguous_length == new_info.length {
-                    println!();
-                    println!("### Results");
-                    println!();
-                    println!("Replication succeeded if this prints '0: hi', '1: ola', '2: hello' and '3: mundo':");
-                    println!();
                     for i in 0..new_info.contiguous_length {
-                        println!(
+                        info!(
                             "{}: {}",
                             i,
                             String::from_utf8(r!(core).get(i).await?.unwrap()).unwrap()
                         );
                     }
-                    println!("Press Ctrl-C to exit");
                 }
                 (old_info, applied, new_info, request_block)
             };
