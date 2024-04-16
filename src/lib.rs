@@ -356,10 +356,11 @@ async fn onmessage<T: HcTraits>(
 #[cfg(test)]
 mod test {
 
+    use async_std::task::sleep;
     use futures_lite::FutureExt;
     use hypercore_protocol::Duplex;
     use piper::pipe;
-    use std::sync::OnceLock;
+    use std::{sync::OnceLock, time::Duration};
 
     use hypercore::{generate_signing_key, HypercoreBuilder, PartialKeypair, Storage};
 
@@ -368,24 +369,23 @@ mod test {
     static PORT: &str = "9845";
     static PIPE_CAPACITY: usize = 1024 * 1024 * 4;
 
-    fn key_pair() -> &'static PartialKeypair {
-        static KEY_PAIR: OnceLock<PartialKeypair> = OnceLock::new();
-        KEY_PAIR.get_or_init(|| {
-            let signing_key = generate_signing_key();
-            PartialKeypair {
-                public: signing_key.verifying_key(),
-                secret: Some(signing_key),
-            }
-        })
+    fn make_reader_and_writer_keys() -> (PartialKeypair, PartialKeypair) {
+        let signing_key = generate_signing_key();
+        let writer_key = PartialKeypair {
+            public: signing_key.verifying_key(),
+            secret: Some(signing_key),
+        };
+        let mut reader_key = writer_key.clone();
+        reader_key.secret = None;
+        (reader_key, writer_key)
     }
 
     #[tokio::test]
-    async fn one_to_one() {
-        let keys = key_pair().clone();
-        let address = format!("127.0.0.1:{PORT}");
+    async fn one_to_one() -> Result<(), ReplicatorError> {
+        let (reader_key, writer_key) = make_reader_and_writer_keys();
         let writer_core = Arc::new(Mutex::new(
             HypercoreBuilder::new(Storage::new_memory().await.unwrap())
-                .key_pair(keys)
+                .key_pair(writer_key)
                 .build()
                 .await
                 .unwrap(),
@@ -395,12 +395,9 @@ mod test {
         let batch: &[&[u8]] = &[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"];
         r!(writer_core).append_batch(batch).await.unwrap();
 
-        let mut keys = key_pair().clone();
-        keys.secret = None;
-        let address = format!("127.0.0.1:{PORT}");
         let reader_core = Arc::new(Mutex::new(
             HypercoreBuilder::new(Storage::new_memory().await.unwrap())
-                .key_pair(keys)
+                .key_pair(reader_key)
                 .build()
                 .await
                 .unwrap(),
@@ -411,8 +408,19 @@ mod test {
 
         let stream_to_reader = Duplex::new(read_from_writer, write_to_reader);
         let stream_to_writer = Duplex::new(read_from_reader, write_to_writer);
-        let server = spawn(writer_core.replicate(stream_to_writer, false));
-        let client = spawn(reader_core.replicate(stream_to_reader, true));
-        server.race(client).await;
+        let _server = spawn(writer_core.replicate(stream_to_writer, false));
+        let _client = spawn(reader_core.clone().replicate(stream_to_reader, true));
+        loop {
+            let length = r!(reader_core).info().length;
+            dbg!(&length);
+            if r!(reader_core).info().length == 4 {
+                if let Some(block) = r!(reader_core).get(3).await? {
+                    dbg!(String::from_utf8_lossy(&block));
+                    break;
+                }
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+        Ok(())
     }
 }
