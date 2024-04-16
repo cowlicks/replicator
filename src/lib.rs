@@ -68,10 +68,6 @@ impl<T: HcTraits + 'static> Replicate for SharedCore<T> {
     where
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
-        let who = match is_initiator {
-            true => "CLIENT",
-            false => "SERVER",
-        };
         let core = self.clone();
         spawn(async move {
             let key = r!(core).key_pair().public.to_bytes().clone();
@@ -80,7 +76,7 @@ impl<T: HcTraits + 'static> Replicate for SharedCore<T> {
             // TODO while let Some(event) = protocol.next().await {
             while let Some(Ok(event)) = protocol.next().await {
                 let core = core.clone();
-                info!("{who} protocol event {:?}", event);
+                info!("protocol event {:?}", event);
                 match event {
                     Event::Handshake(_m) => {
                         if is_initiator {
@@ -96,7 +92,7 @@ impl<T: HcTraits + 'static> Replicate for SharedCore<T> {
                     }
                     Event::Channel(channel) => {
                         if this_dkey == *channel.discovery_key() {
-                            onpeer(core, channel, who).await?;
+                            onpeer(core, channel).await?;
                         }
                     }
                     Event::Close(_dkey) => {}
@@ -112,7 +108,6 @@ impl<T: HcTraits + 'static> Replicate for SharedCore<T> {
 pub async fn onpeer<T: HcTraits + 'static>(
     core: SharedCore<T>,
     mut channel: Channel,
-    who: &str,
 ) -> Result<(), ReplicatorError> {
     let mut peer_state = PeerState::default();
     let info = r!(core).info();
@@ -141,24 +136,18 @@ pub async fn onpeer<T: HcTraits + 'static>(
             start: 0,
             length: info.contiguous_length,
         };
-        info!("{who} sending through channel sync {sync_msg:?} and range {range_msg:?}");
+        info!("Channel.send_batch([{sync_msg:?}, {range_msg:?}])");
         channel
             .send_batch(&[Message::Synchronize(sync_msg), Message::Range(range_msg)])
             .await?;
-        info!("{who} send range and sync");
     } else {
-        info!("\n{who} sending sync {sync_msg:?}\n");
+        info!("channel.send({sync_msg:?})");
         channel.send(Message::Synchronize(sync_msg)).await.unwrap();
-        info!("\n{who} sent sync msg\n");
     }
-    info!("{who} listen to channel");
 
-    let who = who.to_string();
-    // this needed to run in background so message loop over protocol stream can continue along
-    // side this
     spawn(async move {
+        info!("Start listening to channel messages");
         while let Some(message) = channel.next().await {
-            info!("\n{who} got message: {message}\n");
             let result = onmessage(core.clone(), &mut peer_state, &mut channel, message).await;
             if let Err(e) = result {
                 info!("protocol error: {}", e);
