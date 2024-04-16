@@ -2,7 +2,7 @@
 # ⚠️  WARNING 🚧 API unstable ⚒️  and still in development 👷
 
 
-This repo defines a `Replicator` trait for use with [`Hypercore`](#todo).
+This repo defines a `Replicator` trait for use with [`Hypercore`](#todo). It implements the same functionality as this [JavaScript Hypercore replication code](https://github.com/holepunchto/hypercore/blob/3fda699f306fa3f4781ad66ea13ea0df108a48cd/lib/replicator.js).
 
 Usage (aspirational):
 ```rust
