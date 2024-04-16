@@ -76,9 +76,8 @@ impl<T: HcTraits + 'static> Replicator for Arc<Mutex<Hypercore<T>>> {
             let this_dkey = discovery_key(&key);
             let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
             // TODO while let Some(event) = protocol.next().await {
-            while let Some(event) = protocol.next().await {
+            while let Some(Ok(event)) = protocol.next().await {
                 let core = core.clone();
-                let event = event.unwrap();
                 info!("{who} protocol event {:?}", event);
                 match event {
                     Event::Handshake(_m) => {
@@ -95,7 +94,7 @@ impl<T: HcTraits + 'static> Replicator for Arc<Mutex<Hypercore<T>>> {
                     }
                     Event::Channel(channel) => {
                         if this_dkey == *channel.discovery_key() {
-                            onpeer(core, channel, who).await;
+                            onpeer(core, channel, who).await?;
                         }
                     }
                     Event::Close(_dkey) => {}
@@ -111,7 +110,7 @@ pub async fn onpeer<T: HcTraits + 'static>(
     core: Arc<Mutex<Hypercore<T>>>,
     mut channel: Channel,
     who: &str,
-) {
+) -> Result<(), ReplicatorError> {
     let mut peer_state = PeerState::default();
     let info = r!(core).info();
 
@@ -142,8 +141,7 @@ pub async fn onpeer<T: HcTraits + 'static>(
         println!("{who} sending through channel sync {sync_msg:?} and range {range_msg:?}");
         channel
             .send_batch(&[Message::Synchronize(sync_msg), Message::Range(range_msg)])
-            .await
-            .unwrap();
+            .await?;
         println!("{who} send range and sync");
     } else {
         println!("\n{who} sending sync {sync_msg:?}\n");
@@ -165,6 +163,7 @@ pub async fn onpeer<T: HcTraits + 'static>(
             }
         }
     });
+    Ok(())
 }
 
 /// A PeerState stores the head seq of the remote.
