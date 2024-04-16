@@ -20,9 +20,10 @@ use hypercore_protocol::{
     Channel, Event, Message, ProtocolBuilder,
 };
 
-
 trait HcTraits: RandomAccess + Debug + Send {}
 impl<T: RandomAccess + Debug + Send> HcTraits for T {}
+
+type SharedCore<T> = Arc<Mutex<Hypercore<T>>>;
 
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -42,6 +43,8 @@ macro_rules! r {
     };
 }
 
+struct Replicator {}
+
 /// unfortunately this thing has to take `self` because it usually consumes the thing
 pub trait Replicate {
     fn replicate<S>(
@@ -53,7 +56,7 @@ pub trait Replicate {
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static;
 }
 
-impl<T: HcTraits + 'static> Replicate for Arc<Mutex<Hypercore<T>>> {
+impl<T: HcTraits + 'static> Replicate for SharedCore<T> {
     // TODO currently this blocks until the channel closes
     // it should run in the background or something
     // I could prob do this by passing core ino onpeer as a referenced lifetime
@@ -106,7 +109,7 @@ impl<T: HcTraits + 'static> Replicate for Arc<Mutex<Hypercore<T>>> {
 }
 
 pub async fn onpeer<T: HcTraits + 'static>(
-    core: Arc<Mutex<Hypercore<T>>>,
+    core: SharedCore<T>,
     mut channel: Channel,
     who: &str,
 ) -> Result<(), ReplicatorError> {
@@ -194,7 +197,7 @@ impl Default for PeerState {
 }
 
 async fn onmessage<T: HcTraits>(
-    core: Arc<Mutex<Hypercore<T>>>,
+    core: SharedCore<T>,
     peer_state: &mut PeerState,
     channel: &mut Channel,
     message: Message,
