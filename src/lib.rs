@@ -9,7 +9,7 @@ use async_std::{
 use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
 
 use thiserror::Error;
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, warn};
 
 use random_access_storage::RandomAccess;
 
@@ -71,39 +71,44 @@ impl<T: HcTraits + 'static> Replicate for SharedCore<T> {
         is_initiator: bool,
     ) -> impl Future<Output = Result<(), ReplicatorError>> + Send {
         let core = self.clone();
-        spawn(async move {
-            let key = r!(core).key_pair().public.to_bytes().clone();
-            let this_dkey = discovery_key(&key);
-            let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
-            // TODO while let Some(event) = protocol.next().await {
-            while let Some(Ok(event)) = protocol.next().await {
-                let core = core.clone();
-                info!("protocol event {:?}", event);
-                match event {
-                    Event::Handshake(_m) => {
-                        if is_initiator {
-                            protocol.open(key).await?;
-                        }
-                    }
-                    Event::DiscoveryKey(dkey) => {
-                        if this_dkey == dkey {
-                            protocol.open(key).await?;
-                        } else {
-                            panic!("should have same discovery key");
-                        }
-                    }
-                    Event::Channel(channel) => {
-                        if this_dkey == *channel.discovery_key() {
-                            onpeer(core, channel).await?;
-                        }
-                    }
-                    Event::Close(_dkey) => {}
-                    _ => todo!(),
+        spawn(protocol_msg_loop(core, stream, is_initiator))
+    }
+}
+
+async fn protocol_msg_loop<T: HcTraits + 'static, S: StreamTraits>(
+    core: SharedCore<T>,
+    stream: S,
+    is_initiator: bool,
+) -> Result<(), ReplicatorError> {
+    let key = r!(core).key_pair().public.to_bytes().clone();
+    let this_dkey = discovery_key(&key);
+    let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
+    while let Some(Ok(event)) = protocol.next().await {
+        let core = core.clone();
+        info!("protocol event {:?}", event);
+        match event {
+            Event::Handshake(_m) => {
+                if is_initiator {
+                    protocol.open(key).await?;
                 }
             }
-            Ok(())
-        })
+            Event::DiscoveryKey(dkey) => {
+                if this_dkey == dkey {
+                    protocol.open(key).await?;
+                } else {
+                    warn!("Got discovery key for different core: {dkey:?}");
+                }
+            }
+            Event::Channel(channel) => {
+                if this_dkey == *channel.discovery_key() {
+                    onpeer(core, channel).await?;
+                }
+            }
+            Event::Close(_dkey) => {}
+            _ => todo!(),
+        }
     }
+    Ok(())
 }
 
 #[allow(private_bounds)]
@@ -399,7 +404,7 @@ mod test {
 
     #[tokio::test]
     async fn one_to_one() -> Result<(), ReplicatorError> {
-        setup_logs().await;
+        //setup_logs().await;
 
         let (reader_key, writer_key) = make_reader_and_writer_keys();
         let writer_core = Arc::new(Mutex::new(
