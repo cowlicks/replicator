@@ -20,7 +20,8 @@ use hypercore_protocol::{
     Channel, Event, Message, ProtocolBuilder,
 };
 
-pub trait HcTraits: RandomAccess + Debug + Send {}
+
+trait HcTraits: RandomAccess + Debug + Send {}
 impl<T: RandomAccess + Debug + Send> HcTraits for T {}
 
 #[derive(Error, Debug)]
