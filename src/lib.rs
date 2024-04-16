@@ -23,6 +23,9 @@ use hypercore_protocol::{
 trait HcTraits: RandomAccess + Debug + Send {}
 impl<T: RandomAccess + Debug + Send> HcTraits for T {}
 
+trait StreamTraits: AsyncRead + AsyncWrite + Send + Unpin + 'static {}
+impl<S: AsyncRead + AsyncWrite + Send + Unpin + 'static> StreamTraits for S {}
+
 type SharedCore<T> = Arc<Mutex<Hypercore<T>>>;
 
 #[derive(Error, Debug)]
@@ -43,31 +46,30 @@ macro_rules! r {
     };
 }
 
-struct Replicator {}
+struct Replicator<T: HcTraits> {
+    core: SharedCore<T>,
+}
 
 /// unfortunately this thing has to take `self` because it usually consumes the thing
 pub trait Replicate {
-    fn replicate<S>(
+    #[allow(private_bounds)]
+    fn replicate<S: StreamTraits>(
         self,
         stream: S,
         is_initiator: bool,
-    ) -> impl Future<Output = Result<(), ReplicatorError>> + Send
-    where
-        S: AsyncRead + AsyncWrite + Send + Unpin + 'static;
+    ) -> impl Future<Output = Result<(), ReplicatorError>> + Send;
 }
 
 impl<T: HcTraits + 'static> Replicate for SharedCore<T> {
     // TODO currently this blocks until the channel closes
     // it should run in the background or something
     // I could prob do this by passing core ino onpeer as a referenced lifetime
-    fn replicate<S>(
+    #[allow(private_bounds)]
+    fn replicate<S: StreamTraits>(
         self,
         stream: S,
         is_initiator: bool,
-    ) -> impl Future<Output = Result<(), ReplicatorError>> + Send
-    where
-        S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-    {
+    ) -> impl Future<Output = Result<(), ReplicatorError>> + Send {
         let core = self.clone();
         spawn(async move {
             let key = r!(core).key_pair().public.to_bytes().clone();
