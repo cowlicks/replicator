@@ -43,7 +43,7 @@ macro_rules! r {
 }
 
 /// unfortunately this thing has to take `self` because it usually consumes the thing
-pub trait Replicator {
+pub trait Replicate {
     fn replicate<S>(
         self,
         stream: S,
@@ -53,7 +53,7 @@ pub trait Replicator {
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static;
 }
 
-impl<T: HcTraits + 'static> Replicator for Arc<Mutex<Hypercore<T>>> {
+impl<T: HcTraits + 'static> Replicate for Arc<Mutex<Hypercore<T>>> {
     // TODO currently this blocks until the channel closes
     // it should run in the background or something
     // I could prob do this by passing core ino onpeer as a referenced lifetime
