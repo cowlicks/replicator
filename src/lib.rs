@@ -30,18 +30,16 @@ pub enum ReplicatorError {
     // TODO add key and show it
     IoError(#[from] std::io::Error),
     #[error("TODO")]
-    // TODO add key and show it
+    // TODO add error and show it
     HypercoreError(#[from] HypercoreError),
 }
 
 #[macro_export]
-
 macro_rules! r {
     ($core:tt) => {
         $core.lock().await
     };
 }
-//pub use r;
 
 /// unfortunately this thing has to take `self` because it usually consumes the thing
 pub trait Replicator {
@@ -359,4 +357,68 @@ async fn onmessage<T: HcTraits>(
         _ => {}
     };
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+
+    use futures_lite::FutureExt;
+    use hypercore_protocol::Duplex;
+    use piper::pipe;
+    use std::sync::OnceLock;
+
+    use hypercore::{generate_signing_key, HypercoreBuilder, PartialKeypair, Storage};
+
+    use super::*;
+
+    static PORT: &str = "9845";
+    static PIPE_CAPACITY: usize = 1024 * 1024 * 4;
+
+    fn key_pair() -> &'static PartialKeypair {
+        static KEY_PAIR: OnceLock<PartialKeypair> = OnceLock::new();
+        KEY_PAIR.get_or_init(|| {
+            let signing_key = generate_signing_key();
+            PartialKeypair {
+                public: signing_key.verifying_key(),
+                secret: Some(signing_key),
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn one_to_one() {
+        let keys = key_pair().clone();
+        let address = format!("127.0.0.1:{PORT}");
+        let writer_core = Arc::new(Mutex::new(
+            HypercoreBuilder::new(Storage::new_memory().await.unwrap())
+                .key_pair(keys)
+                .build()
+                .await
+                .unwrap(),
+        ));
+
+        // add data
+        let batch: &[&[u8]] = &[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"];
+        r!(writer_core).append_batch(batch).await.unwrap();
+
+        let mut keys = key_pair().clone();
+        keys.secret = None;
+        let address = format!("127.0.0.1:{PORT}");
+        let reader_core = Arc::new(Mutex::new(
+            HypercoreBuilder::new(Storage::new_memory().await.unwrap())
+                .key_pair(keys)
+                .build()
+                .await
+                .unwrap(),
+        ));
+
+        let (read_from_writer, write_to_writer) = pipe(PIPE_CAPACITY);
+        let (read_from_reader, write_to_reader) = pipe(PIPE_CAPACITY);
+
+        let stream_to_reader = Duplex::new(read_from_writer, write_to_reader);
+        let stream_to_writer = Duplex::new(read_from_reader, write_to_writer);
+        let server = spawn(writer_core.replicate(stream_to_writer, false));
+        let client = spawn(reader_core.replicate(stream_to_reader, true));
+        server.race(client).await;
+    }
 }
