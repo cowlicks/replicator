@@ -9,7 +9,7 @@ use async_std::{
 use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
 
 use thiserror::Error;
-use tracing::{error, info};
+use tracing::{error, info, trace};
 
 use random_access_storage::RandomAccess;
 
@@ -108,6 +108,7 @@ impl<T: HcTraits + 'static> Replicate for SharedCore<T> {
     }
 }
 
+#[allow(private_bounds)]
 pub async fn onpeer<T: HcTraits + 'static>(
     core: SharedCore<T>,
     mut channel: Channel,
@@ -313,7 +314,7 @@ async fn onmessage<T: HcTraits>(
                 // If all have been replicated, print the result
                 if new_info.contiguous_length == new_info.length {
                     for i in 0..new_info.contiguous_length {
-                        info!(
+                        trace!(
                             "{}: {}",
                             i,
                             String::from_utf8(r!(core).get(i).await?.unwrap()).unwrap()
@@ -358,19 +359,40 @@ async fn onmessage<T: HcTraits>(
 }
 
 #[cfg(test)]
+mod debug {
+
+    use tokio::sync::OnceCell;
+    static INIT_LOG: OnceCell<()> = OnceCell::const_new();
+    pub async fn setup_logs() {
+        INIT_LOG
+            .get_or_init(|| async {
+                tracing_subscriber::fmt::fmt()
+                    .event_format(
+                        tracing_subscriber::fmt::format()
+                            .without_time()
+                            .with_file(true)
+                            .with_line_number(true),
+                    )
+                    .init();
+            })
+            .await;
+    }
+}
+#[cfg(test)]
+use debug::setup_logs;
+
+#[cfg(test)]
 mod test {
 
     use async_std::task::sleep;
-    use futures_lite::FutureExt;
     use hypercore_protocol::Duplex;
     use piper::pipe;
-    use std::{sync::OnceLock, time::Duration};
+    use std::time::Duration;
 
     use hypercore::{generate_signing_key, HypercoreBuilder, PartialKeypair, Storage};
 
     use super::*;
 
-    static PORT: &str = "9845";
     static PIPE_CAPACITY: usize = 1024 * 1024 * 4;
 
     fn make_reader_and_writer_keys() -> (PartialKeypair, PartialKeypair) {
@@ -386,6 +408,8 @@ mod test {
 
     #[tokio::test]
     async fn one_to_one() -> Result<(), ReplicatorError> {
+        setup_logs().await;
+
         let (reader_key, writer_key) = make_reader_and_writer_keys();
         let writer_core = Arc::new(Mutex::new(
             HypercoreBuilder::new(Storage::new_memory().await.unwrap())
