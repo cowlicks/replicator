@@ -3,6 +3,9 @@ name = "replicator"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+utils = []
+
 [dependencies]
 async-std = "1.12.0"
 futures-lite = "2.3.0"
@@ -17,3 +20,4 @@ async-std = "1.12.0"
 piper = "0.2.1"
 tokio = {version = "1.37.0", features = ["rt", "macros", "sync"] }
 tracing-subscriber = "0.3.18"
+utils = { path = "../utils" }

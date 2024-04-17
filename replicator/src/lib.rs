@@ -30,7 +30,11 @@ use hypercore_protocol::{
     Channel, Event, Message, ProtocolBuilder,
 };
 
+#[cfg(feature = "utils")]
+pub trait HcTraits: RandomAccess + Debug + Send {}
+#[cfg(not(feature = "utils"))]
 trait HcTraits: RandomAccess + Debug + Send {}
+
 impl<T: RandomAccess + Debug + Send> HcTraits for T {}
 
 trait StreamTraits: AsyncRead + AsyncWrite + Send + Unpin + 'static {}
