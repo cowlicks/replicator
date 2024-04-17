@@ -1,14 +1,11 @@
-use super::{git_root, join_paths, run_code, run_make_from_with};
-use std::{
-    path::{Path, PathBuf},
-    process::Output,
-};
+use super::{_run_make_from_with, git_root, join_paths, run_code};
+use std::{path::PathBuf, process::Output};
 
 pub static REL_PATH_TO_NODE_MODULES: &str = "./replicator/tests/common/js/node_modules";
-pub static REL_PATH_TO_JS_DIR: &str = "./replicator/tests/common/js";
+pub static _REL_PATH_TO_JS_DIR: &str = "./replicator/tests/common/js";
 
-pub fn require_js_data() -> Result<(), Box<dyn std::error::Error>> {
-    let _ = run_make_from_with(REL_PATH_TO_JS_DIR, "")?;
+pub fn _require_js_data() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = _run_make_from_with(_REL_PATH_TO_JS_DIR, "")?;
     Ok(())
 }
 
@@ -54,9 +51,9 @@ const write = (x) => process.stdout.write(x);
     )
 }
 
-pub fn run_js(script: &str) -> Result<Output, Box<dyn std::error::Error>> {
+pub fn run_js(key: Option<&str>, script: &str) -> Result<Output, Box<dyn std::error::Error>> {
     run_code(
-        &ram_client_pre_script("127.0.0.1", "9979", None),
+        &ram_client_pre_script(super::HOSTNAME, super::PORT, key),
         script,
         POST_SCRIPT,
         SCRIPT_FILE_NAME,

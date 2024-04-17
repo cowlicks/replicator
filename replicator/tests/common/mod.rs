@@ -1,25 +1,20 @@
 // cargo thinks everything in here is unused even though it is used in the integration tests
-#![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_macros)]
-
 use std::{
     fs::File,
     io::Write,
     process::{Command, Output},
-    sync::atomic::{AtomicU64, Ordering},
 };
 
 use async_std::net::TcpListener;
-use hypercore::{HypercoreBuilder, PartialKeypair};
-use tokio::sync::OnceCell;
+use futures_lite::StreamExt;
+use hypercore::PartialKeypair;
+use replicator::{Replicate, ReplicatorError};
 
 pub mod js;
 
 pub type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;
 
-pub static PATH_TO_DATA_DIR: &str = "tests/common/js/data";
-pub static PATH_TO_C_LIB: &str = "target/debug/libhyperbee.so";
+pub static _PATH_TO_DATA_DIR: &str = "tests/common/js/data";
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -51,11 +46,11 @@ pub fn git_root() -> Result<String> {
     Ok(String::from_utf8(x.stdout)?.trim().to_string())
 }
 
-pub fn get_data_dir() -> Result<String> {
-    Ok(join_paths!(git_root()?, &PATH_TO_DATA_DIR))
+pub fn _get_data_dir() -> Result<String> {
+    Ok(join_paths!(git_root()?, &_PATH_TO_DATA_DIR))
 }
 
-pub fn run_script_relative_to_git_root(script: &str) -> Result<Output> {
+pub fn _run_script_relative_to_git_root(script: &str) -> Result<Output> {
     Ok(Command::new("sh")
         .arg("-c")
         .arg(format!("cd {} && {}", git_root()?, script))
@@ -102,14 +97,14 @@ pub fn run_code(
     check_cmd_output(Command::new("sh").arg("-c").arg(cmd).output()?)
 }
 
-pub fn run_make_from_with(dir: &str, arg: &str) -> Result<Output> {
+pub fn _run_make_from_with(dir: &str, arg: &str) -> Result<Output> {
     let path = join_paths!(git_root()?, dir);
     let cmd = format!("cd {path} && flock make.lock make {arg} && rm -f make.lock ");
     let out = check_cmd_output(Command::new("sh").arg("-c").arg(cmd).output()?)?;
     Ok(out)
 }
 
-pub fn parse_json_result(output: &Output) -> Result<Vec<Vec<u8>>> {
+pub fn _parse_json_result(output: &Output) -> Result<Vec<Vec<u8>>> {
     let stdout = String::from_utf8(output.stdout.clone())?;
     let res: Vec<String> = serde_json::from_str(&stdout)?;
     Ok(res.into_iter().map(|x| x.into()).collect())
@@ -150,59 +145,6 @@ pub fn check_cmd_output(out: Output) -> Result<Output> {
     Ok(out)
 }
 
-static INIT_LOG: OnceCell<()> = OnceCell::const_new();
-pub async fn setup_logs() {
-    INIT_LOG
-        .get_or_init(|| async {
-            tracing_subscriber::fmt::fmt()
-                .event_format(
-                    tracing_subscriber::fmt::format()
-                        .without_time()
-                        .with_file(true)
-                        .with_line_number(true),
-                )
-                .init();
-        })
-        .await;
-}
-/// Seedable deterministic pseudorandom number generator used for reproducible randomized testing
-pub struct Rand {
-    seed: u64,
-    counter: AtomicU64,
-    sin_scale: f64,
-    ordering: Ordering,
-}
-
-impl Rand {
-    pub fn rand(&self) -> f64 {
-        let count = self.counter.fetch_add(1, self.ordering);
-        let x = ((self.seed + count) as f64).sin() * self.sin_scale;
-        x - x.floor()
-    }
-    pub fn rand_int_lt(&self, max: u64) -> u64 {
-        (self.rand() * (max as f64)).floor() as u64
-    }
-    pub fn shuffle<T>(&self, mut arr: Vec<T>) -> Vec<T> {
-        let mut out = vec![];
-        while !arr.is_empty() {
-            let i = self.rand_int_lt(arr.len() as u64) as usize;
-            out.push(arr.remove(i));
-        }
-        out
-    }
-}
-
-impl Default for Rand {
-    fn default() -> Self {
-        Self {
-            seed: 42,
-            counter: Default::default(),
-            sin_scale: 10_000_f64,
-            ordering: Ordering::SeqCst,
-        }
-    }
-}
-
 pub static HOSTNAME: &str = "127.0.0.1";
 pub static PORT: &str = "15001";
 
@@ -210,11 +152,20 @@ pub fn serialize_public_key(key: &PartialKeypair) -> String {
     hex::encode(key.public.as_bytes())
 }
 
-pub async fn run_server(hostname: &str, port: &str) -> Result<String> {
+pub async fn run_server(
+    key: PartialKeypair,
+    hostname: &str,
+    port: &str,
+) -> std::result::Result<(), ReplicatorError> {
+    let core = ram_core(Some(&key)).await;
+
+    dbg!(serialize_public_key(core.lock().await.key_pair()));
     let address = format!("{hostname}:{port}");
     let listener = TcpListener::bind(&address).await?;
-    let core = ram_core(None).await;
-    dbg!(serialize_public_key(core.lock().await.key_pair()));
+    let mut incoming = listener.incoming();
+    let Some(Ok(stream)) = incoming.next().await else {
+        panic!("No connections");
+    };
 
-    todo!()
+    Ok(core.replicate(stream, false).await?)
 }
