@@ -9,6 +9,10 @@
 // https://github.com/holepunchto/hypercore/blob/3fda699f306fa3f4781ad66ea13ea0df108a48cd/test/replicate.js
 // and the code in the hypercore_protocol rs examples:
 // https://github.com/datrs/hypercore-protocol-rs/blob/54d4d91c3fb770688a349e6974eeeff0d50c7c8a/examples-nodejs/replicate.js
+//
+// set up rust client js server
+// make js server
+// copy in hb/tests/common/ stuff and adapt it
 // TODO next add a test for a Protocol with Event close
 use std::{fmt::Debug, marker::Unpin};
 
@@ -60,9 +64,12 @@ macro_rules! r {
     };
 }
 
+/*
+/// the thing that holds replicator state
 struct Replicator<T: HcTraits> {
     core: SharedCore<T>,
 }
+*/
 
 /// unfortunately this thing has to take `self` because it usually consumes the thing
 pub trait Replicate {
@@ -369,29 +376,6 @@ async fn onmessage<T: HcTraits>(
 }
 
 #[cfg(test)]
-mod debug {
-
-    use tokio::sync::OnceCell;
-    static INIT_LOG: OnceCell<()> = OnceCell::const_new();
-    pub async fn setup_logs() {
-        INIT_LOG
-            .get_or_init(|| async {
-                tracing_subscriber::fmt::fmt()
-                    .event_format(
-                        tracing_subscriber::fmt::format()
-                            .without_time()
-                            .with_file(true)
-                            .with_line_number(true),
-                    )
-                    .init();
-            })
-            .await;
-    }
-}
-#[cfg(test)]
-use debug::setup_logs;
-
-#[cfg(test)]
 mod test {
 
     use async_std::task::sleep;
@@ -418,7 +402,7 @@ mod test {
 
     #[tokio::test]
     async fn one_to_one() -> Result<(), ReplicatorError> {
-        //setup_logs().await;
+        //utils::setup_logs().await;
 
         let (reader_key, writer_key) = make_reader_and_writer_keys();
         let writer_core = Arc::new(Mutex::new(
