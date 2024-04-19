@@ -2,9 +2,10 @@ mod common;
 
 use std::time::Duration;
 
+use async_process::ChildStdout;
 use async_std::task::sleep;
 use common::{js::run_hypercore_js, run_server, Result};
-use futures_lite::{AsyncReadExt, AsyncWriteExt, StreamExt};
+use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, StreamExt};
 //use futures_lite::FutureExt;
 use utils::make_reader_and_writer_keys;
 
@@ -90,13 +91,41 @@ socket.pipe(core.replicate(true)).pipe(socket)
     Ok(())
 }
 
+static START_DELIM_MSG: &[u8] = b"; process.stdout.write('";
+static END_DELIM_MSG: &[u8] = b"');";
+
+macro_rules! js_code {
+    ($stdin:expr, $eof:expr, $($arg:tt)*) => {{
+        let code = [
+        format!($($arg)*).as_bytes(),
+            START_DELIM_MSG, $eof, END_DELIM_MSG].concat();
+        $stdin.write_all(&code).await?;
+    }}
+}
+async fn pull_result(stream: &mut Bytes<ChildStdout>, eof: &[u8]) -> Vec<u8> {
+    let mut buff = vec![];
+    while let Some(Ok(b)) = stream.next().await {
+        buff.push(b);
+        if buff.ends_with(eof) {
+            buff.truncate(buff.len() - eof.len());
+            break;
+        }
+    }
+    buff
+}
+macro_rules! repl {
+    ($stdin:expr, $stream:expr, $eof:expr, $($arg:tt)*) => {{
+        js_code!($stdin, $eof, $($arg)*);
+        pull_result($stream, $eof).await
+    }}
+}
+
 #[tokio::test]
 async fn repl() -> Result<()> {
     let (_dir, mut child) = run_js_async_block(
         &format!(
             "
 const {{ repl }} = require('./repl.js');
-
 await repl();
 "
         ),
@@ -106,31 +135,26 @@ await repl();
         ],
     )?;
 
-    let eof_flag = 0u8;
+    let eof: &[u8] = &[0];
 
-    let stdout = child.stdout.take().unwrap();
+    let mut stdout = child.stdout.take().unwrap().bytes();
     let mut stdin = child.stdin.take().unwrap();
 
-    // We need to end the line with a "\n" for the nodejs readline to push it through
-    stdin
-        .write_all(b"console.log(queue); console.log('\0');\n")
-        .await?;
-    stdin.flush().await?;
-    let mut stream = stdout.bytes();
-    let mut buff = vec![];
-    while let Some(Ok(b)) = stream.next().await {
-        buff.push(b);
-        println!("buff {}", String::from_utf8_lossy(&buff));
-        if b == eof_flag {
-            break;
-        }
-    }
-    println!(
-        "GOT FRM STDOUT #1 -----
-    {}
-    ---- END STDOUT",
-        String::from_utf8_lossy(&buff)
+    let result = repl!(stdin, &mut stdout, eof, "process.stdout.write('fooo6!');");
+    assert_eq!(result, b"fooo6!");
+    let result = repl!(
+        stdin,
+        &mut stdout,
+        eof,
+        "
+a = 66;
+b = 7 + a;
+process.stdout.write(`${{b}}`);
+"
     );
+    assert_eq!(result, b"73");
+
+    let _result = repl!(stdin, &mut stdout, eof, "queue.done();");
     dbg!(child.output().await?);
     Ok(())
 }

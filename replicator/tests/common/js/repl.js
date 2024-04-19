@@ -3,21 +3,14 @@ const { AsyncQueue } = require('./utils.js');
 
 module.exports.repl = async function() {
   const queue = new AsyncQueue();
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: false
+  process.stdin.on('data', (chunk) => {
+    queue.push(chunk)
   });
 
-  rl.on('line', function(chunk) {{
-    console.log('got some stdout');
-    queue.push(chunk);
-  }});
-
-  console.log('start loop');
   for await (line of queue) {
     eval(line.toString());
   }
-  rl.close();
+
+  process.stdin.pause();
+
 }
