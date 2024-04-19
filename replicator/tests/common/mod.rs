@@ -138,7 +138,7 @@ macro_rules! write_range_to_hb {
 }
 
 use tempfile::TempDir;
-use utils::ram_core;
+use utils::{ram_core, HcTraits, SharedCore};
 #[allow(unused_imports)]
 pub(crate) use write_range_to_hb;
 
@@ -160,13 +160,11 @@ pub fn serialize_public_key(key: &PartialKeypair) -> String {
     hex::encode(key.public.as_bytes())
 }
 
-pub async fn run_server(
-    key: PartialKeypair,
+pub async fn run_server<T: HcTraits + 'static>(
+    core: SharedCore<T>,
     hostname: &str,
     port: &str,
 ) -> std::result::Result<(), ReplicatorError> {
-    let core = ram_core(Some(&key)).await;
-
     let batch: &[&[u8]] = &[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"];
     core.lock().await.append_batch(batch).await?;
 

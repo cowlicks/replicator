@@ -51,16 +51,16 @@ fn ram_client_pre_script(_hostname: &str, _port: &str, key: Option<&str>) -> Str
     };
     format!(
         "
-const RAM = require('random-access-memory');
-const Hypercore = require('hypercore');
+RAM = require('random-access-memory');
+Hypercore = require('hypercore');
 
-const net = require('net');
-const write = (x) => process.stdout.write(x);
-const start = Date.now();
+net = require('net');
+write = (x) => process.stdout.write(x);
+start = Date.now();
+key = {key};
+core = new Hypercore(RAM, key);
 
 (async() => {{
-    const key = {key};
-    const core = new Hypercore(RAM, key);
     await core.ready();
     "
     )
@@ -93,5 +93,6 @@ pub fn run_hypercore_js(
         script,
         POST_SCRIPT
     );
+    println!("{}", code_string);
     run_js(&code_string, copy_dirs)
 }
