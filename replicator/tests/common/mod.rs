@@ -5,6 +5,7 @@ use std::{
     process::{Command, Output},
 };
 
+use async_process::Stdio;
 use async_std::net::TcpListener;
 use futures_lite::StreamExt;
 use hypercore::PartialKeypair;
@@ -35,9 +36,14 @@ macro_rules! join_paths {
         join_paths!(p.display().to_string(), $($tail)*)
     }};
 }
-
 pub(crate) use join_paths;
 
+#[allow(dead_code)]
+pub fn run_command(cmd: &str) -> Result<Output> {
+    Ok(check_cmd_output(
+        Command::new("sh").arg("-c").arg(cmd).output()?,
+    )?)
+}
 pub fn git_root() -> Result<String> {
     let x = Command::new("sh")
         .arg("-c")
@@ -58,24 +64,17 @@ pub fn _run_script_relative_to_git_root(script: &str) -> Result<Output> {
 }
 
 pub fn run_code(
-    pre_script: &str,
-    script: &str,
-    post_script: &str,
+    code_string: &str,
     script_file_name: &str,
     build_command: impl FnOnce(&str, &str) -> String,
     copy_dirs: Vec<String>,
-) -> Result<Output> {
+) -> Result<(TempDir, async_process::Child)> {
     let working_dir = tempfile::tempdir()?;
 
-    let code = format!(
-        "{pre_script}
-{script}
-{post_script}
-"
-    );
     let script_path = working_dir.path().join(script_file_name);
     let script_file = File::create(&script_path)?;
-    write!(&script_file, "{}", &code)?;
+
+    write!(&script_file, "{}", &code_string)?;
 
     let working_dir_path = working_dir.path().display().to_string();
     // copy dirs into working dir
@@ -94,7 +93,16 @@ pub fn run_code(
     }
     let script_path_str = script_path.display().to_string();
     let cmd = build_command(&working_dir_path, &script_path_str);
-    check_cmd_output(Command::new("sh").arg("-c").arg(cmd).output()?)
+    Ok((
+        working_dir,
+        async_process::Command::new("sh")
+            .stdout(Stdio::piped())
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .arg("-c")
+            .arg(cmd)
+            .spawn()?,
+    ))
 }
 
 pub fn _run_make_from_with(dir: &str, arg: &str) -> Result<Output> {
@@ -129,12 +137,12 @@ macro_rules! write_range_to_hb {
     }};
 }
 
+use tempfile::TempDir;
 use utils::ram_core;
 #[allow(unused_imports)]
 pub(crate) use write_range_to_hb;
 
 pub fn check_cmd_output(out: Output) -> Result<Output> {
-    eprint!("{}", String::from_utf8_lossy(&out.stdout));
     if out.status.code() != Some(0) {
         return Err(Box::new(Error::TestError(format!(
             "comand output status was not zero. Got:\nstdout: {}\nstderr: {}",
@@ -159,7 +167,9 @@ pub async fn run_server(
 ) -> std::result::Result<(), ReplicatorError> {
     let core = ram_core(Some(&key)).await;
 
-    dbg!(serialize_public_key(core.lock().await.key_pair()));
+    let batch: &[&[u8]] = &[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"];
+    core.lock().await.append_batch(batch).await?;
+
     let address = format!("{hostname}:{port}");
     let listener = TcpListener::bind(&address).await?;
     let mut incoming = listener.incoming();

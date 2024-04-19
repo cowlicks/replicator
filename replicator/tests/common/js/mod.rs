@@ -1,17 +1,32 @@
+use tempfile::TempDir;
+
 use super::{_run_make_from_with, git_root, join_paths, run_code};
-use std::{path::PathBuf, process::Output};
+use std::path::PathBuf;
 
 pub static REL_PATH_TO_NODE_MODULES: &str = "./replicator/tests/common/js/node_modules";
-pub static _REL_PATH_TO_JS_DIR: &str = "./replicator/tests/common/js";
+pub static REL_PATH_TO_JS_DIR: &str = "./replicator/tests/common/js";
 
 pub fn _require_js_data() -> Result<(), Box<dyn std::error::Error>> {
-    let _ = _run_make_from_with(_REL_PATH_TO_JS_DIR, "")?;
+    let _ = _run_make_from_with(REL_PATH_TO_JS_DIR, "")?;
     Ok(())
+}
+
+pub fn path_to_js_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    Ok(join_paths!(git_root()?, &REL_PATH_TO_JS_DIR).into())
 }
 
 pub fn path_to_node_modules() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let p = join_paths!(git_root()?, &REL_PATH_TO_NODE_MODULES);
     Ok(p.into())
+}
+
+fn async_iiaf_template(async_body_str: &str) -> String {
+    format!(
+        "(async () => {{
+{}
+}})()",
+        async_body_str
+    )
 }
 
 static POST_SCRIPT: &str = "
@@ -41,23 +56,42 @@ const Hypercore = require('hypercore');
 
 const net = require('net');
 const write = (x) => process.stdout.write(x);
+const start = Date.now();
 
 (async() => {{
     const key = {key};
     const core = new Hypercore(RAM, key);
     await core.ready();
-    write('KEY=' + core.key.toString('hex'));
     "
     )
 }
 
-pub fn run_js(key: Option<&str>, script: &str) -> Result<Output, Box<dyn std::error::Error>> {
-    run_code(
-        &ram_client_pre_script(super::HOSTNAME, super::PORT, key),
+pub fn run_js(
+    code_string: &str,
+    copy_dirs: Vec<String>,
+) -> Result<(TempDir, async_process::Child), Box<dyn std::error::Error>> {
+    run_code(&code_string, SCRIPT_FILE_NAME, build_command, copy_dirs)
+}
+
+pub fn run_js_async_block(
+    code_block_string: &str,
+    copy_dirs: Vec<String>,
+) -> Result<(TempDir, async_process::Child), Box<dyn std::error::Error>> {
+    let code_string = async_iiaf_template(code_block_string);
+    println!("{}", code_string);
+    run_code(&code_string, SCRIPT_FILE_NAME, build_command, copy_dirs)
+}
+
+pub fn run_hypercore_js(
+    key: Option<&str>,
+    script: &str,
+    copy_dirs: Vec<String>,
+) -> Result<(TempDir, async_process::Child), Box<dyn std::error::Error>> {
+    let code_string = format!(
+        "{}\n{}\n{}\n",
+        ram_client_pre_script(super::HOSTNAME, super::PORT, key),
         script,
-        POST_SCRIPT,
-        SCRIPT_FILE_NAME,
-        build_command,
-        vec![],
-    )
+        POST_SCRIPT
+    );
+    run_js(&code_string, copy_dirs)
 }
