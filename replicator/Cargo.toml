@@ -25,3 +25,4 @@ tempfile = "3.10.1"
 tokio = {version = "1.37.0", features = ["rt", "macros", "sync"] }
 tracing-subscriber = "0.3.18"
 utils = { path = "../utils" }
+macros = { path = "../macros" }
