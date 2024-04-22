@@ -5,8 +5,17 @@ use std::path::PathBuf;
 
 pub static REL_PATH_TO_NODE_MODULES: &str = "./replicator/tests/common/js/node_modules";
 pub static REL_PATH_TO_JS_DIR: &str = "./replicator/tests/common/js";
+static POST_SCRIPT: &str = "
+await core.close();
+})()
+";
 
-pub fn _require_js_data() -> Result<(), Box<dyn std::error::Error>> {
+static SCRIPT_FILE_NAME: &str = "script.js";
+pub static RUN_REPL_CODE: &str = "const { repl } = require('./repl.js');
+// start a read-eval-print-loop we use from rust
+await repl();";
+
+pub fn require_js_data() -> Result<(), Box<dyn std::error::Error>> {
     let _ = _run_make_from_with(REL_PATH_TO_JS_DIR, "")?;
     Ok(())
 }
@@ -20,7 +29,7 @@ pub fn path_to_node_modules() -> Result<PathBuf, Box<dyn std::error::Error>> {
     Ok(p.into())
 }
 
-fn async_iiaf_template(async_body_str: &str) -> String {
+pub fn async_iiaf_template(async_body_str: &str) -> String {
     format!(
         "(async () => {{
 {}
@@ -28,13 +37,6 @@ fn async_iiaf_template(async_body_str: &str) -> String {
         async_body_str
     )
 }
-
-static POST_SCRIPT: &str = "
-await core.close();
-})()
-";
-
-static SCRIPT_FILE_NAME: &str = "script.js";
 
 fn build_command(_working_dir: &str, script_path: &str) -> String {
     format!(
@@ -44,11 +46,8 @@ fn build_command(_working_dir: &str, script_path: &str) -> String {
     )
 }
 
-fn ram_client_pre_script(_hostname: &str, _port: &str, key: Option<&str>) -> String {
-    let key = match key {
-        None => "undefined".to_string(),
-        Some(k) => format!("'{k}'"),
-    };
+fn ram_client_pre_script(key: Option<&str>) -> String {
+    let key = key.map(|k| format!("'{k}'")).unwrap_or("undefined".into());
     format!(
         "
 RAM = require('random-access-memory');
@@ -73,15 +72,6 @@ pub fn run_js(
     run_code(&code_string, SCRIPT_FILE_NAME, build_command, copy_dirs)
 }
 
-pub fn run_js_async_block(
-    code_block_string: &str,
-    copy_dirs: Vec<String>,
-) -> Result<(TempDir, async_process::Child), Box<dyn std::error::Error>> {
-    let code_string = async_iiaf_template(code_block_string);
-    println!("{}", code_string);
-    run_code(&code_string, SCRIPT_FILE_NAME, build_command, copy_dirs)
-}
-
 pub fn run_hypercore_js(
     key: Option<&str>,
     script: &str,
@@ -89,7 +79,7 @@ pub fn run_hypercore_js(
 ) -> Result<(TempDir, async_process::Child), Box<dyn std::error::Error>> {
     let code_string = format!(
         "{}\n{}\n{}\n",
-        ram_client_pre_script(super::HOSTNAME, super::PORT, key),
+        ram_client_pre_script(key),
         script,
         POST_SCRIPT
     );

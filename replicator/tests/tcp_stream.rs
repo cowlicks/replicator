@@ -3,10 +3,11 @@ mod common;
 use async_process::ChildStdout;
 use common::{js::run_hypercore_js, run_server, Result};
 use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, StreamExt};
+use macros::start_func_with;
 use utils::{make_reader_and_writer_keys, ram_core};
 
 use crate::common::{
-    js::{path_to_js_dir, run_js_async_block},
+    js::{async_iiaf_template, path_to_js_dir, require_js_data, run_js, RUN_REPL_CODE},
     serialize_public_key, HOSTNAME, PORT,
 };
 
@@ -50,6 +51,7 @@ macro_rules! repl {
 }
 static EOF: &[u8] = &[0, 1, 0];
 
+#[start_func_with(require_js_data()?;)]
 #[tokio::test]
 async fn rs_server_js_client_initial_data_moves() -> Result<()> {
     let (rkey, wkey) = make_reader_and_writer_keys();
@@ -119,13 +121,8 @@ queue.done();"
 
 #[tokio::test]
 async fn read_eval_print_macro_works() -> Result<()> {
-    let (_dir, mut child) = run_js_async_block(
-        &format!(
-            "
-const {{ repl }} = require('./repl.js');
-await repl();
-"
-        ),
+    let (_dir, mut child) = run_js(
+        &async_iiaf_template(RUN_REPL_CODE),
         vec![
             format!("{}/utils.js", path_to_js_dir()?.to_string_lossy()),
             format!("{}/repl.js", path_to_js_dir()?.to_string_lossy()),
