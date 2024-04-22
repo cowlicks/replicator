@@ -1,55 +1,21 @@
 mod common;
 
 use async_process::ChildStdout;
-use common::{js::run_hypercore_js, run_server, Result};
-use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, StreamExt};
+use common::{
+    js::{connect_and_teardown_js_core, run_hypercore_js},
+    run_server, Result,
+};
+use futures_lite::{io::Bytes, AsyncWriteExt, StreamExt};
 use macros::start_func_with;
 use utils::{make_reader_and_writer_keys, ram_core};
 
 use crate::common::{
-    js::{async_iiaf_template, path_to_js_dir, require_js_data, run_js, RUN_REPL_CODE},
+    js::{
+        async_iiaf_template, path_to_js_dir, repl, require_js_data, run_async_js_block, run_js,
+        RUN_REPL_CODE,
+    },
     serialize_public_key, HOSTNAME, PORT,
 };
-
-static START_ASYNC_BLOCK: &[u8] = b";(async () => {\n";
-static END_ASYNC_BLOCK: &[u8] = b"})();";
-
-static START_DELIM_MSG: &[u8] = b"; process.stdout.write('";
-static END_DELIM_MSG: &[u8] = b"');";
-
-macro_rules! js_code {
-    ($stdin:expr, $eof:expr, $($arg:tt)*) => {{
-        let block = format!($($arg)*);
-        let code = [
-            START_ASYNC_BLOCK,
-            block.as_bytes(),
-            START_DELIM_MSG,
-            $eof,
-            END_DELIM_MSG,
-            END_ASYNC_BLOCK,
-        ].concat();
-        $stdin.write_all(&code).await?;
-    }}
-}
-async fn pull_result(stdout: &mut Bytes<ChildStdout>, eof: &[u8]) -> Vec<u8> {
-    let mut buff = vec![];
-    while let Some(Ok(b)) = stdout.next().await {
-        buff.push(b);
-        if buff.ends_with(eof) {
-            buff.truncate(buff.len() - eof.len());
-            break;
-        }
-    }
-    buff
-}
-
-macro_rules! repl {
-    ($context:expr, $($arg:tt)*) => {{
-        js_code!($context.0, $context.2, $($arg)*);
-        pull_result(&mut $context.1, $context.2).await
-    }}
-}
-static EOF: &[u8] = &[0, 1, 0];
 
 #[start_func_with(require_js_data()?;)]
 #[tokio::test]
@@ -72,68 +38,39 @@ async fn rs_server_js_client_initial_data_moves() -> Result<()> {
 
     // create a reader core in javascript
     let rkey_hex = serialize_public_key(&rkey);
-    let (_dir, mut child) = run_hypercore_js(
+    let mut context = run_hypercore_js(
         Some(&rkey_hex),
-        &format!(
-            "
-const {{ repl }} = require('./repl.js');
-// start a read-eval-print-loop we use from rust
-await repl();"
-        ),
+        &connect_and_teardown_js_core(PORT, HOSTNAME, RUN_REPL_CODE),
         vec![
             format!("{}/utils.js", path_to_js_dir()?.to_string_lossy()),
             format!("{}/repl.js", path_to_js_dir()?.to_string_lossy()),
         ],
     )?;
-    // data used for the rs -> js repl
-    let mut context = (
-        child.stdin.take().unwrap(),
-        child.stdout.take().unwrap().bytes(),
-        EOF,
-    );
-
-    // connect the js reader core and update it
+    // print the length of the core so we can check it in rust
     let result = repl!(
         context,
-        "
-socket = net.connect('{PORT}', '{HOSTNAME}');
-await core.update();
-socket.pipe(core.replicate(true)).pipe(socket)
-await core.update({{wait: true}});
-// print the length of the core so we can check it in rust
-process.stdout.write(String((await core.info()).length));
-"
+        "process.stdout.write(String((await core.info()).length));"
     );
     // assert the js core has 4 blocks
     assert_eq!(result, b"4");
 
-    // close the socket in js, stop the repl. When repl is stopped hypercore is closed
-    let _ = repl!(
-        context,
-        "socket.destroy();
-queue.done();"
-    );
+    // stop the repl. When repl is stopped hypercore & socket are closed
+    let _ = repl!(context, "queue.done();");
 
     // ensure js process closes properly
-    assert_eq!(child.output().await?.status.code(), Some(0));
+    assert_eq!(context.child.output().await?.status.code(), Some(0));
     Ok(())
 }
 
 #[tokio::test]
 async fn read_eval_print_macro_works() -> Result<()> {
-    let (_dir, mut child) = run_js(
+    let mut context = run_js(
         &async_iiaf_template(RUN_REPL_CODE),
         vec![
             format!("{}/utils.js", path_to_js_dir()?.to_string_lossy()),
             format!("{}/repl.js", path_to_js_dir()?.to_string_lossy()),
         ],
     )?;
-
-    let mut context = (
-        child.stdin.take().unwrap(),
-        child.stdout.take().unwrap().bytes(),
-        EOF,
-    );
 
     let result = repl!(context, "process.stdout.write('fooo6!');");
     assert_eq!(result, b"fooo6!");
@@ -148,6 +85,9 @@ process.stdout.write(`${{b}}`);
     assert_eq!(result, b"73");
 
     let _result = repl!(context, "queue.done();");
-    println!("{}", String::from_utf8_lossy(&child.output().await?.stderr));
+    println!(
+        "{}",
+        String::from_utf8_lossy(&context.child.output().await?.stderr)
+    );
     Ok(())
 }
