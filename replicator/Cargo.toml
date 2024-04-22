@@ -26,3 +26,4 @@ tokio = {version = "1.37.0", features = ["rt", "macros", "sync"] }
 tracing-subscriber = "0.3.18"
 utils = { path = "../utils" }
 macros = { path = "../macros" }
+random-access-memory = "3.0.0"

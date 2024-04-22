@@ -153,7 +153,7 @@ pub fn check_cmd_output(out: Output) -> Result<Output> {
     Ok(out)
 }
 
-pub static HOSTNAME: &str = "127.0.0.1";
+pub static LOOPBACK: &str = "127.0.0.1";
 pub static PORT: &str = "15001";
 
 pub fn serialize_public_key(key: &PartialKeypair) -> String {
@@ -161,12 +161,9 @@ pub fn serialize_public_key(key: &PartialKeypair) -> String {
 }
 
 pub async fn run_server<T: HcTraits + 'static>(
+    listener: TcpListener,
     core: SharedCore<T>,
-    hostname: &str,
-    port: &str,
 ) -> std::result::Result<(), ReplicatorError> {
-    let address = format!("{hostname}:{port}");
-    let listener = TcpListener::bind(&address).await?;
     let mut incoming = listener.incoming();
     let Some(Ok(stream)) = incoming.next().await else {
         panic!("No connections");
