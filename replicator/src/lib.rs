@@ -17,8 +17,8 @@
 use std::{fmt::Debug, marker::Unpin};
 
 use async_std::{
-    sync::{Arc, Mutex},
-    task::spawn,
+    sync::{Arc, Mutex, RwLock},
+    task::{spawn, JoinHandle},
 };
 use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
 
@@ -44,6 +44,7 @@ impl<T: RandomAccess + Debug + Send> HcTraits for T {}
 trait StreamTraits: AsyncRead + AsyncWrite + Send + Unpin + 'static {}
 impl<S: AsyncRead + AsyncWrite + Send + Unpin + 'static> StreamTraits for S {}
 
+type ShareRw<T> = Arc<RwLock<T>>;
 type SharedCore<T> = Arc<Mutex<Hypercore<T>>>;
 
 #[derive(Error, Debug)]
@@ -58,18 +59,18 @@ pub enum ReplicatorError {
 }
 
 #[macro_export]
-macro_rules! r {
+macro_rules! lk {
     ($core:tt) => {
         $core.lock().await
     };
 }
 
-/*
-/// the thing that holds replicator state
-struct Replicator<T: HcTraits> {
-    core: SharedCore<T>,
+#[macro_export]
+macro_rules! r {
+    ($core:tt) => {
+        $core.read().await
+    };
 }
-*/
 
 /// unfortunately this thing has to take `self` because it usually consumes the thing
 pub trait Replicate {
@@ -101,12 +102,12 @@ async fn protocol_msg_loop<T: HcTraits + 'static, S: StreamTraits>(
     stream: S,
     is_initiator: bool,
 ) -> Result<(), ReplicatorError> {
-    let key = r!(core).key_pair().public.to_bytes().clone();
+    let key = lk!(core).key_pair().public.to_bytes().clone();
     let this_dkey = discovery_key(&key);
     let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
     while let Some(Ok(event)) = protocol.next().await {
         let core = core.clone();
-        info!("protocol event {:?}", event);
+        info!("Proto RX: {:?}", event);
         match event {
             Event::Handshake(_m) => {
                 if is_initiator {
@@ -132,19 +133,17 @@ async fn protocol_msg_loop<T: HcTraits + 'static, S: StreamTraits>(
     Ok(())
 }
 
-#[allow(private_bounds)]
-pub async fn onpeer<T: HcTraits + 'static>(
+async fn initiate_sync<T: HcTraits>(
     core: SharedCore<T>,
-    mut channel: Channel,
+    peer_state: ShareRw<PeerState>,
+    channel: &mut Channel,
 ) -> Result<(), ReplicatorError> {
-    let mut peer_state = PeerState::default();
-    let info = r!(core).info();
-
-    if info.fork != peer_state.remote_fork {
-        peer_state.can_upgrade = false;
+    let info = lk!(core).info();
+    if info.fork != peer_state.read().await.remote_fork {
+        peer_state.write().await.can_upgrade = false;
     }
-    let remote_length = if info.fork == peer_state.remote_fork {
-        peer_state.remote_length
+    let remote_length = if info.fork == peer_state.read().await.remote_fork {
+        peer_state.read().await.remote_length
     } else {
         0
     };
@@ -153,7 +152,7 @@ pub async fn onpeer<T: HcTraits + 'static>(
         fork: info.fork,
         length: info.length,
         remote_length,
-        can_upgrade: peer_state.can_upgrade,
+        can_upgrade: peer_state.read().await.can_upgrade,
         uploading: true,
         downloading: true,
     };
@@ -164,25 +163,222 @@ pub async fn onpeer<T: HcTraits + 'static>(
             start: 0,
             length: info.contiguous_length,
         };
-        info!("Channel.send_batch([{sync_msg:?}, {range_msg:?}])");
+        info!("Channel TX:[\n\t{sync_msg:?},\n\t{range_msg:?}\n])");
         channel
             .send_batch(&[Message::Synchronize(sync_msg), Message::Range(range_msg)])
             .await?;
     } else {
-        info!("channel.send({sync_msg:?})");
-        channel.send(Message::Synchronize(sync_msg)).await.unwrap();
+        info!("Channel TX:\n\t{sync_msg:?})");
+        channel.send(Message::Synchronize(sync_msg)).await?;
     }
+    Ok(())
+}
 
-    spawn(async move {
-        info!("Start listening to channel messages");
+async fn core_event_loop<T: HcTraits>(
+    core: SharedCore<T>,
+    peer_state: ShareRw<PeerState>,
+    mut channel: Channel,
+) -> Result<(), ReplicatorError> {
+    let mut onupgrade = core.lock().await.onupgrade();
+    while let Ok(_event) = onupgrade.recv().await {
+        trace!("got core upgrade event. Notifying peers");
+        initiate_sync(core.clone(), peer_state.clone(), &mut channel).await?
+    }
+    Ok(())
+}
+
+#[allow(private_bounds)]
+pub async fn onpeer<T: HcTraits + 'static>(
+    core: SharedCore<T>,
+    mut channel: Channel,
+) -> Result<(JoinHandle<Result<(), ReplicatorError>>, JoinHandle<()>), ReplicatorError> {
+    let peer_state = Arc::new(RwLock::new(PeerState::default()));
+
+    initiate_sync(core.clone(), peer_state.clone(), &mut channel).await?;
+
+    let event_loop = spawn(core_event_loop(
+        core.clone(),
+        peer_state.clone(),
+        channel.clone(),
+    ));
+    let channel_rx_loop = spawn(async move {
+        trace!("Start listening to channel messages");
         while let Some(message) = channel.next().await {
-            let result = onmessage(core.clone(), &mut peer_state, &mut channel, message).await;
+            info!("Channel RX:\n\t{message:?}");
+            let result =
+                onmessage(core.clone(), peer_state.clone(), channel.clone(), message).await;
             if let Err(e) = result {
-                info!("protocol error: {}", e);
+                trace!("protocol error: {}", e);
                 break;
             }
         }
     });
+    Ok((event_loop, channel_rx_loop))
+}
+async fn onmessage<T: HcTraits>(
+    core: SharedCore<T>,
+    peer_state: ShareRw<PeerState>,
+    mut channel: Channel,
+    message: Message,
+) -> Result<(), ReplicatorError> {
+    match message {
+        Message::Synchronize(message) => {
+            trace!("Got Synchronize message {message:?}");
+            let length_changed = message.length != r!(peer_state).remote_length;
+            let first_sync = !r!(peer_state).remote_synced;
+            let info = lk!(core).info();
+            let same_fork = message.fork == info.fork;
+
+            {
+                let mut ps = peer_state.write().await;
+                ps.remote_fork = message.fork;
+                ps.remote_length = message.length;
+                ps.remote_can_upgrade = message.can_upgrade;
+                ps.remote_uploading = message.uploading;
+                ps.remote_downloading = message.downloading;
+                ps.remote_synced = true;
+
+                ps.length_acked = if same_fork { message.remote_length } else { 0 };
+            }
+
+            let mut messages = vec![];
+
+            if first_sync {
+                // Need to send another sync back that acknowledges the received sync
+                let msg = Synchronize {
+                    fork: info.fork,
+                    length: info.length,
+                    remote_length: r!(peer_state).remote_length,
+                    can_upgrade: r!(peer_state).can_upgrade,
+                    uploading: true,
+                    downloading: true,
+                };
+                messages.push(Message::Synchronize(msg));
+            }
+
+            if r!(peer_state).remote_length > info.length
+                && r!(peer_state).length_acked == info.length
+                && length_changed
+            {
+                let msg = Request {
+                    id: 1, // There should be proper handling for in-flight request ids
+                    fork: info.fork,
+                    hash: None,
+                    block: None,
+                    seek: None,
+                    upgrade: Some(RequestUpgrade {
+                        start: info.length,
+                        length: r!(peer_state).remote_length - info.length,
+                    }),
+                };
+                messages.push(Message::Request(msg));
+            }
+            info!("Channel TX:\n\t{messages:?}");
+            channel.send_batch(&messages).await?;
+        }
+        Message::Request(message) => {
+            trace!("Got Request message {message:?}");
+            let (info, proof) = {
+                let proof = lk!(core)
+                    .create_proof(message.block, message.hash, message.seek, message.upgrade)
+                    .await
+                    .unwrap();
+                //TODO .await?;
+                (lk!(core).info(), proof)
+            };
+            if let Some(proof) = proof {
+                let msg = Data {
+                    request: message.id,
+                    fork: info.fork,
+                    hash: proof.hash,
+                    block: proof.block,
+                    seek: proof.seek,
+                    upgrade: proof.upgrade,
+                };
+                info!("Channel TX:\n\tData {{...}}");
+                channel.send(Message::Data(msg)).await?;
+            }
+        }
+        Message::Data(message) => {
+            trace!("Got Data message Data {{...}}");
+            let (_old_info, _applied, new_info, request_block) = {
+                let old_info = lk!(core).info();
+                let proof = message.clone().into_proof();
+                let applied = lk!(core).verify_and_apply_proof(&proof).await?;
+                let new_info = lk!(core).info();
+                let request_block: Option<RequestBlock> = if let Some(upgrade) = &message.upgrade {
+                    // When getting the initial upgrade, send a request for the first missing block
+                    if old_info.length < upgrade.length {
+                        let request_index = old_info.length;
+                        let nodes = lk!(core).missing_nodes(request_index).await?;
+                        Some(RequestBlock {
+                            index: request_index,
+                            nodes,
+                        })
+                    } else {
+                        None
+                    }
+                } else if let Some(block) = &message.block {
+                    // When receiving a block, ask for the next, if there are still some missing
+                    if block.index < r!(peer_state).remote_length - 1 {
+                        let request_index = block.index + 1;
+                        let nodes = lk!(core).missing_nodes(request_index).await?;
+                        Some(RequestBlock {
+                            index: request_index,
+                            nodes,
+                        })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                // If all have been replicated, print the result
+                if new_info.contiguous_length == new_info.length {
+                    for i in 0..new_info.contiguous_length {
+                        trace!(
+                            "{}: {}",
+                            i,
+                            String::from_utf8(lk!(core).get(i).await?.unwrap()).unwrap()
+                        );
+                    }
+                }
+                (old_info, applied, new_info, request_block)
+            };
+
+            let mut messages: Vec<Message> = vec![];
+            if let Some(upgrade) = &message.upgrade {
+                let new_length = upgrade.length;
+                let remote_length = if new_info.fork == r!(peer_state).remote_fork {
+                    r!(peer_state).remote_length
+                } else {
+                    0
+                };
+                messages.push(Message::Synchronize(Synchronize {
+                    fork: new_info.fork,
+                    length: new_length,
+                    remote_length,
+                    can_upgrade: false,
+                    uploading: true,
+                    downloading: true,
+                }));
+            }
+            if let Some(request_block) = request_block {
+                messages.push(Message::Request(Request {
+                    id: request_block.index + 1,
+                    fork: new_info.fork,
+                    hash: None,
+                    block: Some(request_block),
+                    seek: None,
+                    upgrade: None,
+                }));
+            }
+            info!("Channel TX:\n\t{messages:?}");
+            channel.send_batch(&messages).await.unwrap();
+        }
+        _ => {}
+    };
     Ok(())
 }
 
@@ -212,167 +408,6 @@ impl Default for PeerState {
             length_acked: 0,
         }
     }
-}
-
-async fn onmessage<T: HcTraits>(
-    core: SharedCore<T>,
-    peer_state: &mut PeerState,
-    channel: &mut Channel,
-    message: Message,
-) -> Result<(), ReplicatorError> {
-    match message {
-        Message::Synchronize(message) => {
-            info!("Got Synchronize message {message:?}");
-            let length_changed = message.length != peer_state.remote_length;
-            let first_sync = !peer_state.remote_synced;
-            let info = r!(core).info();
-            let same_fork = message.fork == info.fork;
-
-            peer_state.remote_fork = message.fork;
-            peer_state.remote_length = message.length;
-            peer_state.remote_can_upgrade = message.can_upgrade;
-            peer_state.remote_uploading = message.uploading;
-            peer_state.remote_downloading = message.downloading;
-            peer_state.remote_synced = true;
-
-            peer_state.length_acked = if same_fork { message.remote_length } else { 0 };
-
-            let mut messages = vec![];
-
-            if first_sync {
-                // Need to send another sync back that acknowledges the received sync
-                let msg = Synchronize {
-                    fork: info.fork,
-                    length: info.length,
-                    remote_length: peer_state.remote_length,
-                    can_upgrade: peer_state.can_upgrade,
-                    uploading: true,
-                    downloading: true,
-                };
-                messages.push(Message::Synchronize(msg));
-            }
-
-            if peer_state.remote_length > info.length
-                && peer_state.length_acked == info.length
-                && length_changed
-            {
-                let msg = Request {
-                    id: 1, // There should be proper handling for in-flight request ids
-                    fork: info.fork,
-                    hash: None,
-                    block: None,
-                    seek: None,
-                    upgrade: Some(RequestUpgrade {
-                        start: info.length,
-                        length: peer_state.remote_length - info.length,
-                    }),
-                };
-                messages.push(Message::Request(msg));
-            }
-            channel.send_batch(&messages).await?;
-        }
-        Message::Request(message) => {
-            info!("Got Request message {message:?}");
-            let (info, proof) = {
-                let proof = r!(core)
-                    .create_proof(message.block, message.hash, message.seek, message.upgrade)
-                    .await
-                    .unwrap();
-                //TODO .await?;
-                (r!(core).info(), proof)
-            };
-            if let Some(proof) = proof {
-                let msg = Data {
-                    request: message.id,
-                    fork: info.fork,
-                    hash: proof.hash,
-                    block: proof.block,
-                    seek: proof.seek,
-                    upgrade: proof.upgrade,
-                };
-                channel.send(Message::Data(msg)).await?;
-            }
-        }
-        Message::Data(message) => {
-            info!("Got Data message {message:?}");
-            let (_old_info, _applied, new_info, request_block) = {
-                let old_info = r!(core).info();
-                let proof = message.clone().into_proof();
-                let applied = r!(core).verify_and_apply_proof(&proof).await?;
-                let new_info = r!(core).info();
-                let request_block: Option<RequestBlock> = if let Some(upgrade) = &message.upgrade {
-                    // When getting the initial upgrade, send a request for the first missing block
-                    if old_info.length < upgrade.length {
-                        let request_index = old_info.length;
-                        let nodes = r!(core).missing_nodes(request_index).await?;
-                        Some(RequestBlock {
-                            index: request_index,
-                            nodes,
-                        })
-                    } else {
-                        None
-                    }
-                } else if let Some(block) = &message.block {
-                    // When receiving a block, ask for the next, if there are still some missing
-                    if block.index < peer_state.remote_length - 1 {
-                        let request_index = block.index + 1;
-                        let nodes = r!(core).missing_nodes(request_index).await?;
-                        Some(RequestBlock {
-                            index: request_index,
-                            nodes,
-                        })
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                // If all have been replicated, print the result
-                if new_info.contiguous_length == new_info.length {
-                    for i in 0..new_info.contiguous_length {
-                        trace!(
-                            "{}: {}",
-                            i,
-                            String::from_utf8(r!(core).get(i).await?.unwrap()).unwrap()
-                        );
-                    }
-                }
-                (old_info, applied, new_info, request_block)
-            };
-
-            let mut messages: Vec<Message> = vec![];
-            if let Some(upgrade) = &message.upgrade {
-                let new_length = upgrade.length;
-                let remote_length = if new_info.fork == peer_state.remote_fork {
-                    peer_state.remote_length
-                } else {
-                    0
-                };
-                messages.push(Message::Synchronize(Synchronize {
-                    fork: new_info.fork,
-                    length: new_length,
-                    remote_length,
-                    can_upgrade: false,
-                    uploading: true,
-                    downloading: true,
-                }));
-            }
-            if let Some(request_block) = request_block {
-                messages.push(Message::Request(Request {
-                    id: request_block.index + 1,
-                    fork: new_info.fork,
-                    hash: None,
-                    block: Some(request_block),
-                    seek: None,
-                    upgrade: None,
-                }));
-            }
-            channel.send_batch(&messages).await.unwrap();
-        }
-        _ => {}
-    };
-    Ok(())
 }
 
 #[cfg(test)]
@@ -415,7 +450,7 @@ mod test {
 
         // add data
         let batch: &[&[u8]] = &[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"];
-        r!(writer_core).append_batch(batch).await.unwrap();
+        lk!(writer_core).append_batch(batch).await.unwrap();
 
         let reader_core = Arc::new(Mutex::new(
             HypercoreBuilder::new(Storage::new_memory().await.unwrap())
@@ -433,10 +468,10 @@ mod test {
         let _server = spawn(writer_core.replicate(stream_to_writer, false));
         let _client = spawn(reader_core.clone().replicate(stream_to_reader, true));
         loop {
-            let length = r!(reader_core).info().length;
+            let length = lk!(reader_core).info().length;
             dbg!(&length);
-            if r!(reader_core).info().length == 4 {
-                if let Some(block) = r!(reader_core).get(3).await? {
+            if lk!(reader_core).info().length == 4 {
+                if let Some(block) = lk!(reader_core).get(3).await? {
                     dbg!(String::from_utf8_lossy(&block));
                     break;
                 }
