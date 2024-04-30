@@ -7,7 +7,7 @@ edition = "2021"
 replicator = { path = "../replicator", features = ["utils"] }
 tracing-subscriber = "0.3.18"
 async-std = "1.12.0"
-hypercore = "0.12.1"
-hypercore-protocol = "0.4.1"
+hypercore = { git  = "https://github.com/cowlicks/hypercore.git", branch = "add-events" }
+hypercore-protocol = { git  = "https://github.com/cowlicks/hypercore-protocol-rs.git", branch = "add-events" }
 random-access-memory = "3.0.0"
 tokio = { version = "1.37.0", features = ["sync"] }
