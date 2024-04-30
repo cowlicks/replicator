@@ -150,5 +150,11 @@ macro_rules! repl {
         crate::common::js::pull_result_from_stdout(&mut $context.stdout, &$context.eof).await
     }}
 }
-
 pub(crate) use repl;
+
+macro_rules! flush_stdout {
+    ($context:expr) => {{
+        repl!($context, "")
+    }};
+}
+pub(crate) use flush_stdout;

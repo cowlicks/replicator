@@ -154,13 +154,12 @@ pub fn check_cmd_output(out: Output) -> Result<Output> {
 }
 
 pub static LOOPBACK: &str = "127.0.0.1";
-pub static PORT: &str = "15001";
 
 pub fn serialize_public_key(key: &PartialKeypair) -> String {
     hex::encode(key.public.as_bytes())
 }
 
-pub async fn run_server<T: HcTraits + 'static>(
+pub async fn run_replicate<T: HcTraits + 'static>(
     listener: TcpListener,
     core: SharedCore<T>,
 ) -> std::result::Result<(), ReplicatorError> {
