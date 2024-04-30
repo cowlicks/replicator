@@ -1,27 +1,26 @@
 mod common;
 
-use async_process::ChildStdout;
 use async_std::net::TcpListener;
 use common::{
     js::{connect_and_teardown_js_core, run_hypercore_js, JsContext},
-    run_server, Result,
+    run_replicate, Result,
 };
-use futures_lite::{io::Bytes, AsyncWriteExt, StreamExt};
+use futures_lite::AsyncWriteExt;
 use macros::start_func_with;
 use random_access_memory::RandomAccessMemory;
-use utils::{make_reader_and_writer_keys, ram_core, HcTraits, SharedCore};
+use utils::{make_reader_and_writer_keys, ram_core, SharedCore};
 
 use crate::common::{
     js::{
-        async_iiaf_template, path_to_js_dir, repl, require_js_data, run_async_js_block, run_js,
-        RUN_REPL_CODE,
+        async_iiaf_template, flush_stdout, path_to_js_dir, repl, require_js_data,
+        run_async_js_block, run_js, RUN_REPL_CODE,
     },
     serialize_public_key, LOOPBACK,
 };
 
 #[start_func_with(require_js_data()?;)]
 #[tokio::test]
-async fn rs_server_js_client_initial_data_moves() -> Result<()> {
+async fn initial_data_rs_data_replicates_to_js() -> Result<()> {
     let (rkey, wkey) = make_reader_and_writer_keys();
 
     // create the writer core in rust
@@ -33,10 +32,11 @@ async fn rs_server_js_client_initial_data_moves() -> Result<()> {
     core.lock().await.append_batch(batch).await?;
 
     // run replication in the background
+    // NB: the :0 makes it choose a random port
     let listener = TcpListener::bind(format!("{}:0", LOOPBACK)).await?;
     let port = format!("{}", listener.local_addr()?.port());
     let _server =
-        async_std::task::spawn(async move { run_server(listener, server_core).await.unwrap() });
+        async_std::task::spawn(async move { run_replicate(listener, server_core).await.unwrap() });
 
     // create a reader core in javascript
     let rkey_hex = serialize_public_key(&rkey);
@@ -49,6 +49,7 @@ async fn rs_server_js_client_initial_data_moves() -> Result<()> {
         ],
     )?;
     // print the length of the core so we can check it in rust
+    flush_stdout!(context);
     let result = repl!(
         context,
         "process.stdout.write(String((await core.info()).length));"
@@ -88,14 +89,13 @@ process.stdout.write(`${{b}}`);
     assert_eq!(result, b"73");
 
     let _result = repl!(context, "queue.done();");
-    println!(
-        "{}",
-        String::from_utf8_lossy(&context.child.output().await?.stderr)
-    );
+    let _ = context.child.output().await?;
     Ok(())
 }
 
-async fn setup_rs_writer_js_reader() -> Result<(SharedCore<RandomAccessMemory>, JsContext)> {
+async fn setup_rs_writer_js_reader<A: AsRef<[u8]>, B: AsRef<[A]>>(
+    batch: B,
+) -> Result<(SharedCore<RandomAccessMemory>, JsContext)> {
     let (rkey, wkey) = make_reader_and_writer_keys();
 
     // create the writer core in rust
@@ -107,7 +107,8 @@ async fn setup_rs_writer_js_reader() -> Result<(SharedCore<RandomAccessMemory>, 
     let port = format!("{}", listener.local_addr()?.port());
 
     let _server =
-        async_std::task::spawn(async move { run_server(listener, server_core).await.unwrap() });
+        async_std::task::spawn(async move { run_replicate(listener, server_core).await.unwrap() });
+    core.lock().await.append_batch(batch).await?;
 
     // create a reader core in javascript
     let rkey_hex = serialize_public_key(&rkey);
@@ -124,29 +125,53 @@ async fn setup_rs_writer_js_reader() -> Result<(SharedCore<RandomAccessMemory>, 
 
 #[start_func_with(require_js_data()?;)]
 #[tokio::test]
-async fn new_data_moved_to_js() -> Result<()> {
-    let (core, mut context) = setup_rs_writer_js_reader().await?;
+async fn added_data_replicates_to_js() -> Result<()> {
+    let (core, mut context) = setup_rs_writer_js_reader([b"a", b"b", b"c"]).await?;
 
-    let result = repl!(context, "write(String((await core.info()).length))");
-    assert_eq!(result, b"0");
-
-    // add code to core here
-    core.lock().await.append(b"hello").await?;
+    let _ = repl!(
+        context,
+        "
+        await core.update({{wait: true}});
+await new Promise(r => setTimeout(r, 1e2))
+"
+    );
     let result = repl!(
+        context,
+        "process.stdout.write(String((await core.info()).length));"
+    );
+    assert_eq!(result, b"3");
+
+    core.lock().await.append(b"1").await?;
+    let _ = repl!(
         context,
         "
 await core.update({{wait: true}});
-process.stdout.write(String((await core.info()).length));
-                       "
+await new Promise(r => setTimeout(r, 1e2))
+"
     );
-    assert_eq!(result, b"1");
-    let _ = repl!(context, "queue.done();");
-    println!(
-        "{}",
-        String::from_utf8_lossy(&context.child.output().await?.stderr)
+    let result = repl!(
+        context,
+        "process.stdout.write(String((await core.info()).length));"
     );
-    // stop the repl. When repl is stopped hypercore & socket are closed
+    assert_eq!(result, b"4");
 
-    // ensure js process closes properly
+    // stop the repl. When repl is stopped hypercore & socket are closed
+    let _ = repl!(context, "queue.done();");
+    let _ = context.child.output().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn events() -> Result<()> {
+    let (_rkey, wkey) = make_reader_and_writer_keys();
+
+    // create the writer core in rust
+    let core = ram_core(Some(&wkey)).await;
+    let mut rec = core.lock().await.onupgrade();
+    core.lock().await.append(b"foo").await?;
+    let Ok(_) = rec.recv().await else {
+        panic!("Colud not get event");
+    };
+    Ok(())
+}
+// 1800558 8321
