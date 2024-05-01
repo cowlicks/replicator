@@ -223,8 +223,7 @@ async fn onmessage<T: HcTraits>(
 ) -> Result<(), ReplicatorError> {
     match message {
         Message::Synchronize(message) => {
-            trace!("Got Synchronize message {message:?}");
-            let length_changed = message.length != r!(peer_state).remote_length;
+            let peer_length_changed = message.length != r!(peer_state).remote_length;
             let first_sync = !r!(peer_state).remote_synced;
             let info = lk!(core).info();
             let same_fork = message.fork == info.fork;
@@ -240,7 +239,6 @@ async fn onmessage<T: HcTraits>(
 
                 ps.length_acked = if same_fork { message.remote_length } else { 0 };
             }
-
             let mut messages = vec![];
 
             if first_sync {
@@ -256,9 +254,12 @@ async fn onmessage<T: HcTraits>(
                 messages.push(Message::Synchronize(msg));
             }
 
+            // if peer is longer than us
             if r!(peer_state).remote_length > info.length
+                // and peer knows our correct length
                 && r!(peer_state).length_acked == info.length
-                && length_changed
+                // and peer's length has changed
+                && peer_length_changed
             {
                 let msg = Request {
                     id: 1, // There should be proper handling for in-flight request ids
@@ -271,6 +272,7 @@ async fn onmessage<T: HcTraits>(
                         length: r!(peer_state).remote_length - info.length,
                     }),
                 };
+
                 messages.push(Message::Request(msg));
             }
             info!("Channel TX:\n\t{messages:?}");
@@ -388,11 +390,13 @@ async fn onmessage<T: HcTraits>(
 struct PeerState {
     can_upgrade: bool,
     remote_fork: u64,
+    /// how long the peer said it's core was
     remote_length: u64,
     remote_can_upgrade: bool,
     remote_uploading: bool,
     remote_downloading: bool,
     remote_synced: bool,
+    /// how long the peer thinks our core is
     length_acked: u64,
 }
 impl Default for PeerState {
@@ -416,6 +420,7 @@ mod test {
     use async_std::task::sleep;
     use hypercore_protocol::Duplex;
     use piper::pipe;
+    use random_access_memory::RandomAccessMemory;
     use std::time::Duration;
 
     use hypercore::{generate_signing_key, HypercoreBuilder, PartialKeypair, Storage};
@@ -435,10 +440,15 @@ mod test {
         (reader_key, writer_key)
     }
 
-    #[tokio::test]
-    async fn one_to_one() -> Result<(), ReplicatorError> {
-        //utils::setup_logs().await;
-
+    async fn create_connected_cores<A: AsRef<[u8]>, B: AsRef<[A]>>(
+        initial_data: B,
+    ) -> Result<
+        (
+            SharedCore<RandomAccessMemory>,
+            SharedCore<RandomAccessMemory>,
+        ),
+        ReplicatorError,
+    > {
         let (reader_key, writer_key) = make_reader_and_writer_keys();
         let writer_core = Arc::new(Mutex::new(
             HypercoreBuilder::new(Storage::new_memory().await.unwrap())
@@ -449,8 +459,7 @@ mod test {
         ));
 
         // add data
-        let batch: &[&[u8]] = &[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"];
-        lk!(writer_core).append_batch(batch).await.unwrap();
+        lk!(writer_core).append_batch(initial_data).await.unwrap();
 
         let reader_core = Arc::new(Mutex::new(
             HypercoreBuilder::new(Storage::new_memory().await.unwrap())
@@ -465,18 +474,56 @@ mod test {
 
         let stream_to_reader = Duplex::new(read_from_writer, write_to_reader);
         let stream_to_writer = Duplex::new(read_from_reader, write_to_writer);
-        let _server = spawn(writer_core.replicate(stream_to_writer, false));
+        let _server = spawn(writer_core.clone().replicate(stream_to_writer, false));
         let _client = spawn(reader_core.clone().replicate(stream_to_reader, true));
-        loop {
-            let length = lk!(reader_core).info().length;
-            dbg!(&length);
-            if lk!(reader_core).info().length == 4 {
-                if let Some(block) = lk!(reader_core).get(3).await? {
-                    dbg!(String::from_utf8_lossy(&block));
+        Ok((writer_core, reader_core))
+    }
+
+    #[tokio::test]
+    async fn initial_data_replicated() -> Result<(), ReplicatorError> {
+        let batch: &[&[u8]] = &[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"];
+        let (_, reader_core) = create_connected_cores(batch).await?;
+        for i in 0..batch.len() {
+            loop {
+                if lk!(reader_core).info().length as usize >= i + 1 {
+                    if let Some(block) = lk!(reader_core).get(i as u64).await? {
+                        if block == batch[i].to_vec() {
+                            break;
+                        }
+                    }
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn new_data_replicated() -> Result<(), ReplicatorError> {
+        //utils::setup_logs().await;
+        let data: Vec<&[u8]> = vec![b"hi\n", b"ola\n", b"hello\n", b"mundo\n"];
+        let nope: Vec<&[u8]> = vec![];
+        let mut i: u64 = 0;
+        let (writer_core, reader_core) = create_connected_cores(nope).await?;
+        for i in 0..data.len() {
+            dbg!(i);
+            if i == 2 {
+                println!("START THE LOGS");
+            }
+            writer_core.lock().await.append(data[i as usize]).await?;
+            println!("Block i = {i} appended [{:?}]", data[i as usize]);
+            while (lk!(reader_core).info().length as usize) < i + 1 {
+                sleep(Duration::from_millis(10)).await;
+            }
+            let len = lk!(reader_core).info().length;
+            assert_eq!(len as usize, i + 1);
+            loop {
+                let block = lk!(reader_core).get(i as u64).await?;
+                if block == Some(data[i as usize].to_vec()) {
                     break;
                 }
+                sleep(Duration::from_millis(100)).await;
             }
-            sleep(Duration::from_millis(100)).await;
         }
         Ok(())
     }
