@@ -9,8 +9,8 @@ utils = []
 [dependencies]
 async-std = "1.12.0"
 futures-lite = "2.3.0"
-hypercore = { git  = "https://github.com/cowlicks/hypercore.git", branch = "add-events", default_features = false, features = ["tokio"]}
-hypercore-protocol = { git  = "https://github.com/cowlicks/hypercore-protocol-rs.git", branch = "add-events", features = ["debug", "tokio"], default_features = false }
+hypercore = { path  = "../../hypercore", default_features = false, features = ["tokio"]}
+hypercore-protocol = { path  = "../../hypercore-protocol-rs", features = ["debug", "tokio"], default_features = false }
 random-access-storage = "5.0.0"
 tracing = "0.1.40"
 thiserror = "1.0.50"
