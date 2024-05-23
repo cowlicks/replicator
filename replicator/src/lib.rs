@@ -23,7 +23,7 @@ use std::{collections::HashMap, fmt::Debug, marker::Unpin};
 
 use async_std::{
     sync::{Arc, Mutex, RwLock},
-    task::{spawn, JoinHandle},
+    task::spawn,
 };
 use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
 
@@ -261,25 +261,17 @@ pub async fn onpeer<T: HcTraits + 'static>(
     core: SharedCore<T>,
     mut channel: Channel,
 ) -> Result<(), ReplicatorError> {
-    let name = name!(core);
     let peer_state = Arc::new(RwLock::new(PeerState::default()));
 
     initiate_sync(core.clone(), peer_state.clone(), &mut channel).await?;
 
-    let event_loop = spawn(core_event_loop(
+    let _event_loop = spawn(core_event_loop(
         core.clone(),
         peer_state.clone(),
         channel.clone(),
     ));
-    let channel_rx_loop = spawn(async move {
+    let _channel_rx_loop = spawn(async move {
         while let Some(message) = channel.next().await {
-            {
-                let dm: Box<dyn Debug> = match message.clone() {
-                    Message::Data(d) => Box::new(DebugData(d.clone())),
-                    x => Box::new(x.clone()),
-                };
-                info!("\n\t{name} Channel RX:\n\t{dm:#?}");
-            }
             let result =
                 onmessage(core.clone(), peer_state.clone(), channel.clone(), message).await;
             if let Err(e) = result {
@@ -382,9 +374,6 @@ async fn onmessage<T: HcTraits>(
             }
         }
         Message::Data(message) => {
-            if name == "Reader" && lk!(core).info().length > 0 {
-                println!("YOOOOOOOOOOOO");
-            }
             trace!("Got Data message Data {{...}}");
             let (_old_info, _applied, new_info, request_block) = {
                 let old_info = lk!(core).info();
