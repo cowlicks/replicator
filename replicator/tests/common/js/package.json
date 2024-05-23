@@ -5,7 +5,8 @@
   "license": "MIT",
   "dependencies": {
     "hyperbee": "^2.18.1",
-    "hypercore": "10.31.10",
+    "hypercore": "file:../../../../../hypercore-js",
+    "random-access-file": "^4.0.7",
     "random-access-memory": "^6.2.1"
   }
 }
