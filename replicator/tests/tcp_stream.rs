@@ -167,7 +167,7 @@ async fn events() -> Result<()> {
 
     // create the writer core in rust
     let core = ram_core(Some(&wkey)).await;
-    let mut rec = core.lock().await.onupgrade();
+    let mut rec = core.lock().await.on_upgrade();
     core.lock().await.append(b"foo").await?;
     let Ok(_) = rec.recv().await else {
         panic!("Colud not get event");

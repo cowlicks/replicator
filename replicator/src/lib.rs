@@ -14,7 +14,12 @@
 // make js server
 // copy in hb/tests/common/ stuff and adapt it
 // TODO next add a test for a Protocol with Event close
-use std::{fmt::Debug, marker::Unpin};
+//
+// problem reader gets sync from writer but Sync.remote_length = 1 which isn't right. remote
+// (reader here) is 2. writer got remote length from readers last sync message.
+// but that message in reader took the length from a data message from writer. it is
+// data.upgrade.length.
+use std::{collections::HashMap, fmt::Debug, marker::Unpin};
 
 use async_std::{
     sync::{Arc, Mutex, RwLock},

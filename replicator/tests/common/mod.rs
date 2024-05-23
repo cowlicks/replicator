@@ -168,5 +168,6 @@ pub async fn run_replicate<T: HcTraits + 'static>(
         panic!("No connections");
     };
 
-    Ok(core.replicate(stream, false).await?)
+    let mut replicator = core.replicate().await?;
+    Ok(replicator.add_stream(stream, false).await?)
 }
