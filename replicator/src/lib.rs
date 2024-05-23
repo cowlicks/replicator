@@ -120,6 +120,7 @@ pub enum ReplicatorError {
 }
 
 /// unfortunately this thing has to take `self` because it usually consumes the thing
+#[allow(private_bounds)]
 pub trait Replicate<T: HcTraits> {
     #[allow(private_bounds)]
     fn replicate(&self) -> impl Future<Output = Result<HcReplicator<T>, ReplicatorError>> + Send;
@@ -147,6 +148,7 @@ pub struct HcReplicator<T: HcTraits> {
     messages: Option<HashMap<String, Option<tokio::sync::broadcast::Sender<Message>>>>,
 }
 
+#[allow(private_bounds)]
 impl<T: HcTraits + 'static> HcReplicator<T> {
     pub async fn get_messages(
         self,
