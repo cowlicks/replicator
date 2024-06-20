@@ -3,3 +3,4 @@
 members = [ "macros",
  "replicator", "utils",
 ]
+resolver = "2"

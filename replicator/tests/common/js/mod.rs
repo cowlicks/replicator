@@ -15,7 +15,7 @@ pub static RUN_REPL_CODE: &str = "const { repl } = require('./repl.js');
 await repl();";
 
 pub fn require_js_data() -> Result<(), Box<dyn std::error::Error>> {
-    let _ = _run_make_from_with(REL_PATH_TO_JS_DIR, "")?;
+    let _ = _run_make_from_with(REL_PATH_TO_JS_DIR, "node_module")?;
     Ok(())
 }
 
