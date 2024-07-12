@@ -21,6 +21,7 @@
 // data.upgrade.length.
 use std::{fmt::Debug, marker::Unpin};
 
+use async_channel::Receiver;
 use async_std::{
     sync::{Arc, Mutex, RwLock},
     task::spawn,
@@ -155,7 +156,16 @@ impl HcReplicator {
         let key = lk!(core).key_pair().public.to_bytes().clone();
         let this_dkey = discovery_key(&key);
         let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
-        self.messages = Some(protocol.get_message_senders());
+        let receiver = protocol.receiver_for_all_channel_messages();
+        let receiver = Arc::new(RwLock::new(receiver));
+        self.receiver = Some(receiver.clone());
+
+        let message_buff = self.message_buff.clone();
+        spawn(async move {
+            while let Ok(msg) = receiver.read().await.recv().await {
+                message_buff.write().await.push(msg);
+            }
+        });
         let name = name!(core);
         while let Some(Ok(event)) = protocol.next().await {
             info!("\n\t{name} Proto RX:\n\t{:#?}", event);
