@@ -19,7 +19,7 @@
 // (reader here) is 2. writer got remote length from readers last sync message.
 // but that message in reader took the length from a data message from writer. it is
 // data.upgrade.length.
-use std::{collections::HashMap, fmt::Debug, marker::Unpin};
+use std::{fmt::Debug, marker::Unpin};
 
 use async_std::{
     sync::{Arc, Mutex, RwLock},
@@ -30,8 +30,6 @@ use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
 use thiserror::Error;
 use tracing::{error, info, trace, warn};
 
-use random_access_storage::RandomAccess;
-
 use hypercore::{DataUpgrade, Hypercore, HypercoreError, RequestBlock, RequestUpgrade};
 use hypercore_protocol::{
     discovery_key,
@@ -39,20 +37,13 @@ use hypercore_protocol::{
     Channel, Event, Message, ProtocolBuilder,
 };
 
-#[cfg(feature = "utils")]
-pub trait HcTraits: RandomAccess + Debug + Send {}
-#[cfg(not(feature = "utils"))]
-trait HcTraits: RandomAccess + Debug + Send {}
-
-impl<T: RandomAccess + Debug + Send> HcTraits for T {}
-
 trait StreamTraits: AsyncRead + AsyncWrite + Send + Unpin + 'static {}
 impl<S: AsyncRead + AsyncWrite + Send + Unpin + 'static> StreamTraits for S {}
 
 type ShareRw<T> = Arc<RwLock<T>>;
-type SharedCore<T> = Arc<Mutex<Hypercore<T>>>;
+type SharedCore = Arc<Mutex<Hypercore>>;
 
-async fn is_writer<T: HcTraits>(c: SharedCore<T>) -> bool {
+async fn is_writer(c: SharedCore) -> bool {
     lk!(c).key_pair().secret.is_some()
 }
 
@@ -121,45 +112,37 @@ pub enum ReplicatorError {
 
 /// unfortunately this thing has to take `self` because it usually consumes the thing
 #[allow(private_bounds)]
-pub trait Replicate<T: HcTraits> {
+pub trait Replicate {
     #[allow(private_bounds)]
-    fn replicate(&self) -> impl Future<Output = Result<HcReplicator<T>, ReplicatorError>> + Send;
+    fn replicate(&self) -> impl Future<Output = Result<HcReplicator, ReplicatorError>> + Send;
 }
 
-impl<T: HcTraits> Replicate<T> for SharedCore<T> {
+impl Replicate for SharedCore {
     // TODO currently this blocks until the channel closes
     // it should run in the background or something
     // I could prob do this by passing core ino onpeer as a referenced lifetime
     #[allow(private_bounds)]
-    fn replicate(&self) -> impl Future<Output = Result<HcReplicator<T>, ReplicatorError>> + Send {
+    fn replicate(&self) -> impl Future<Output = Result<HcReplicator, ReplicatorError>> + Send {
         let core = self.clone();
-        async move {
-            Ok(HcReplicator {
-                core,
-                messages: None,
-            })
-        }
+        async move { Ok(HcReplicator::new(core)) }
     }
 }
 
 #[allow(private_bounds)]
-pub struct HcReplicator<T: HcTraits> {
-    core: SharedCore<T>,
-    messages: Option<HashMap<String, Option<tokio::sync::broadcast::Sender<Message>>>>,
+pub struct HcReplicator {
+    core: SharedCore,
+    message_buff: Arc<RwLock<Vec<Message>>>,
+    receiver: Option<Arc<RwLock<Receiver<Message>>>>,
 }
 
 #[allow(private_bounds)]
-impl<T: HcTraits + 'static> HcReplicator<T> {
-    pub async fn get_messages(
-        self,
-    ) -> Option<HashMap<String, Option<tokio::sync::broadcast::Receiver<Message>>>> {
-        self.messages.map(|hm| {
-            let mut out = HashMap::new();
-            for (key, sender) in hm.iter() {
-                out.insert(key.clone(), sender.as_ref().map(|s| s.subscribe()));
-            }
-            out
-        })
+impl HcReplicator {
+    pub fn new(core: SharedCore) -> Self {
+        Self {
+            core,
+            message_buff: Arc::new(RwLock::new(vec![])),
+            receiver: None,
+        }
     }
 
     #[allow(private_bounds)]
@@ -203,8 +186,8 @@ impl<T: HcTraits + 'static> HcReplicator<T> {
         Ok(())
     }
 }
-async fn initiate_sync<T: HcTraits>(
-    core: SharedCore<T>,
+async fn initiate_sync(
+    core: SharedCore,
     peer_state: ShareRw<PeerState>,
     channel: &mut Channel,
 ) -> Result<(), ReplicatorError> {
@@ -245,8 +228,8 @@ async fn initiate_sync<T: HcTraits>(
     Ok(())
 }
 
-async fn core_event_loop<T: HcTraits>(
-    core: SharedCore<T>,
+async fn core_event_loop(
+    core: SharedCore,
     peer_state: ShareRw<PeerState>,
     mut channel: Channel,
 ) -> Result<(), ReplicatorError> {
@@ -259,10 +242,7 @@ async fn core_event_loop<T: HcTraits>(
 }
 
 #[allow(private_bounds)]
-pub async fn onpeer<T: HcTraits + 'static>(
-    core: SharedCore<T>,
-    mut channel: Channel,
-) -> Result<(), ReplicatorError> {
+pub async fn onpeer(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
     let peer_state = Arc::new(RwLock::new(PeerState::default()));
 
     initiate_sync(core.clone(), peer_state.clone(), &mut channel).await?;
@@ -285,8 +265,8 @@ pub async fn onpeer<T: HcTraits + 'static>(
     Ok(())
 }
 
-async fn onmessage<T: HcTraits>(
-    core: SharedCore<T>,
+async fn onmessage(
+    core: SharedCore,
     peer_state: ShareRw<PeerState>,
     mut channel: Channel,
     message: Message,
@@ -492,10 +472,9 @@ impl Default for PeerState {
 #[cfg(test)]
 mod test {
 
-    use async_std::task::sleep;
+    use async_std::task::{sleep, JoinHandle};
     use hypercore_protocol::Duplex;
     use piper::pipe;
-    use random_access_memory::RandomAccessMemory;
     use std::time::Duration;
 
     use hypercore::{generate_signing_key, HypercoreBuilder, PartialKeypair, Storage};
@@ -518,14 +497,8 @@ mod test {
         initial_data: B,
     ) -> Result<
         (
-            (
-                SharedCore<RandomAccessMemory>,
-                JoinHandle<Result<(), ReplicatorError>>,
-            ),
-            (
-                SharedCore<RandomAccessMemory>,
-                JoinHandle<Result<(), ReplicatorError>>,
-            ),
+            (SharedCore, JoinHandle<Result<(), ReplicatorError>>),
+            (SharedCore, JoinHandle<Result<(), ReplicatorError>>),
         ),
         ReplicatorError,
     > {
