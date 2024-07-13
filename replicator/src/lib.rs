@@ -21,7 +21,6 @@
 // data.upgrade.length.
 use std::{fmt::Debug, marker::Unpin};
 
-use async_channel::Receiver;
 use async_std::{
     sync::{Arc, Mutex, RwLock},
     task::spawn,
@@ -35,7 +34,7 @@ use hypercore::{DataUpgrade, Hypercore, HypercoreError, RequestBlock, RequestUpg
 use hypercore_protocol::{
     discovery_key,
     schema::{Data, Range, Request, Synchronize},
-    Channel, Event, Message, ProtocolBuilder,
+    Channel, Event, Message, Protocol, ProtocolBuilder,
 };
 
 trait StreamTraits: AsyncRead + AsyncWrite + Send + Unpin + 'static {}
@@ -111,80 +110,81 @@ pub enum ReplicatorError {
     HypercoreError(#[from] HypercoreError),
 }
 
-/// unfortunately this thing has to take `self` because it usually consumes the thing
-#[allow(private_bounds)]
 pub trait Replicate {
-    #[allow(private_bounds)]
     fn replicate(&self) -> impl Future<Output = Result<HcReplicator, ReplicatorError>> + Send;
 }
 
 impl Replicate for SharedCore {
-    // TODO currently this blocks until the channel closes
-    // it should run in the background or something
-    // I could prob do this by passing core ino onpeer as a referenced lifetime
-    #[allow(private_bounds)]
     fn replicate(&self) -> impl Future<Output = Result<HcReplicator, ReplicatorError>> + Send {
         let core = self.clone();
         async move { Ok(HcReplicator::new(core)) }
     }
 }
 
-#[allow(private_bounds)]
 pub struct HcReplicator {
     core: SharedCore,
-    message_buff: Arc<RwLock<Vec<Message>>>,
-    receiver: Option<Arc<RwLock<Receiver<Message>>>>,
 }
 
-#[allow(private_bounds)]
-impl HcReplicator {
-    pub fn new(core: SharedCore) -> Self {
+#[allow(private_bounds)] // TODO rmme
+pub struct Peer<IO: StreamTraits> {
+    core: SharedCore,
+    protocol: ShareRw<Protocol<IO>>,
+    message_buff: ShareRw<Vec<Message>>,
+}
+
+#[allow(private_bounds)] // TODO rmme
+impl<IO: StreamTraits> Peer<IO> {
+    fn new(core: SharedCore, protocol: ShareRw<Protocol<IO>>) -> Self {
         Self {
             core,
+            protocol,
             message_buff: Arc::new(RwLock::new(vec![])),
-            receiver: None,
         }
     }
 
-    #[allow(private_bounds)]
-    pub async fn add_stream<S: StreamTraits>(
-        &mut self,
-        stream: S,
-        is_initiator: bool,
-    ) -> Result<(), ReplicatorError> {
-        let core = self.core.clone();
-        let key = lk!(core).key_pair().public.to_bytes().clone();
-        let this_dkey = discovery_key(&key);
-        let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
-        let receiver = protocol.receiver_for_all_channel_messages();
-        let receiver = Arc::new(RwLock::new(receiver));
-        self.receiver = Some(receiver.clone());
-
+    async fn listen_to_channel_messages(&self) {
+        let receiver = self
+            .protocol
+            .read()
+            .await
+            .receiver_for_all_channel_messages();
         let message_buff = self.message_buff.clone();
         spawn(async move {
-            while let Ok(msg) = receiver.read().await.recv().await {
+            while let Ok(msg) = receiver.recv().await {
+                println!("{msg}");
                 message_buff.write().await.push(msg);
             }
         });
-        let name = name!(core);
-        while let Some(Ok(event)) = protocol.next().await {
+    }
+
+    async fn start_message_loop(&self, is_initiator: bool) -> Result<(), ReplicatorError> {
+        let key = self.core.lock().await.key_pair().public.to_bytes().clone();
+        let this_dkey = discovery_key(&key);
+        let name = "snthsth";
+        //let name = name!(self.core);
+        let protocol = self.protocol.clone();
+        while let Some(Ok(event)) = {
+            // this block is just here to release the `.write()` lock
+            let p = protocol.write().await.next().await;
+            p
+        } {
             info!("\n\t{name} Proto RX:\n\t{:#?}", event);
             match event {
                 Event::Handshake(_m) => {
                     if is_initiator {
-                        protocol.open(key).await?;
+                        protocol.write().await.open(key).await?;
                     }
                 }
                 Event::DiscoveryKey(dkey) => {
                     if this_dkey == dkey {
-                        protocol.open(key).await?;
+                        protocol.write().await.open(key).await?;
                     } else {
                         warn!("Got discovery key for different core: {dkey:?}");
                     }
                 }
                 Event::Channel(channel) => {
                     if this_dkey == *channel.discovery_key() {
-                        onpeer(core.clone(), channel).await?;
+                        onpeer(self.core.clone(), channel).await?;
                     } else {
                         error!("Wrong discovery key?");
                     }
@@ -193,6 +193,37 @@ impl HcReplicator {
                 _ => todo!(),
             }
         }
+        Ok(())
+    }
+}
+
+#[allow(private_bounds)]
+impl HcReplicator {
+    pub fn new(core: SharedCore) -> Self {
+        Self { core }
+    }
+
+    pub async fn add_peer<S: StreamTraits>(
+        &mut self,
+        stream: S,
+        is_initiator: bool,
+    ) -> Result<Peer<S>, ReplicatorError> {
+        let core = self.core.clone();
+        let protocol = ProtocolBuilder::new(is_initiator).connect(stream);
+        Ok(Peer::new(core, Arc::new(RwLock::new(protocol))))
+    }
+
+    pub async fn add_stream<S: StreamTraits + Sync>(
+        &mut self,
+        stream: S,
+        is_initiator: bool,
+    ) -> Result<(), ReplicatorError> {
+        let peer = self.add_peer(stream, is_initiator).await?;
+        spawn(async move {
+            peer.listen_to_channel_messages().await;
+            peer.start_message_loop(is_initiator).await?;
+            Ok::<(), ReplicatorError>(())
+        });
         Ok(())
     }
 }
@@ -251,7 +282,6 @@ async fn core_event_loop(
     Ok(())
 }
 
-#[allow(private_bounds)]
 pub async fn onpeer(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
     let peer_state = Arc::new(RwLock::new(PeerState::default()));
 
