@@ -228,7 +228,6 @@ async fn append_many_foreach_reader_update_reader_get() -> Result<(), Replicator
         assert_eq!(reader_core.lock().await.info().length as usize, i + 1);
 
         // wait for reader to `.get(i)`
-        let mut s = 1;
         loop {
             println!("QQ try get {i}");
             let block = reader_core.lock().await.get(i as u64).await?;

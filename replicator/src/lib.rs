@@ -298,7 +298,7 @@ async fn core_event_loop(
 
 async fn on_get_event_loop(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
     let mut on_get = core.lock().await.on_get_subscribe();
-    while let Ok((index, tx)) = on_get.recv().await {
+    while let Ok((index, _tx)) = on_get.recv().await {
         trace!("got core upgrade event. Notifying peers");
         let block = RequestBlock {
             index,
