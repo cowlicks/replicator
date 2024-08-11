@@ -7,7 +7,6 @@ use common::{
 };
 use futures_lite::AsyncWriteExt;
 use macros::start_func_with;
-use random_access_memory::RandomAccessMemory;
 use utils::{make_reader_and_writer_keys, ram_core, SharedCore};
 
 use crate::common::{
@@ -95,7 +94,7 @@ process.stdout.write(`${{b}}`);
 
 async fn setup_rs_writer_js_reader<A: AsRef<[u8]>, B: AsRef<[A]>>(
     batch: B,
-) -> Result<(SharedCore<RandomAccessMemory>, JsContext)> {
+) -> Result<(SharedCore, JsContext)> {
     let (rkey, wkey) = make_reader_and_writer_keys();
 
     // create the writer core in rust
@@ -174,4 +173,3 @@ async fn events() -> Result<()> {
     };
     Ok(())
 }
-// 1800558 8321
