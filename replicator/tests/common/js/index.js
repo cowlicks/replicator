@@ -1,4 +1,4 @@
-const Hypercore = require('hypercore');
+const Hypercore = require('../../../../../js/core');
 const RAM = require('random-access-memory');
 
 const logYellow = f => {
@@ -19,25 +19,26 @@ const l = (...x) => [console.log(...x), x[0]][1];
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const pause = () => sleep(500);
 
-const noInitialData = (async () => {
+
+const initial_sync = (async () => {
   const a = new Hypercore(RAM, undefined, {name: 'Writer'});
   await a.ready();
   const b = new Hypercore(RAM, a.key, {name: 'Reader'});
   await b.ready();
-  await pause();
-
   const s1 = a.replicate(false, { keepAlive: false });
   const s2 = b.replicate(true, { keepAlive: false });
   s1.pipe(s2).pipe(s1);
 
   await pause();
-  /* Writer and Reader both send syncs */
-  l('\n\nsent messages\n\n')
-  l(a.replicator.peers[0].tx_msgs);
-  l(b.replicator.peers[0].tx_msgs);
+  await pause();
+  await pause();
+  l('\n\nWriter messages\n\n')
+  a.replicator.peers[0].print_msgs();
+  l('\n\nREADER messages\n\n')
+  b.replicator.peers[0].print_msgs();
 });
 
-const writerWithInitialData = (async () => {
+const one_block_before = (async () => {
   const a = new Hypercore(RAM, undefined, {name: 'Writer'});
   await a.ready();
   const b = new Hypercore(RAM, a.key, {name: 'Reader'});
@@ -45,17 +46,38 @@ const writerWithInitialData = (async () => {
   await pause();
   await a.append('0');
   await pause();
+  console.log("do connect");;
   const s1 = a.replicate(false, { keepAlive: false });
   const s2 = b.replicate(true, { keepAlive: false });
   s1.pipe(s2).pipe(s1);
   await pause();
-  /* Writer and Reader both send syncs */
-  l('\n\nsent messages\n\n')
-  l(a.replicator.peers[0].tx_msgs);
-  l(b.replicator.peers[0].tx_msgs);
+
+  l('\n\nWriter messages\n\n')
+  a.replicator.peers[0].print_msgs();
+  l('\n\nREADER messages\n\n')
+  b.replicator.peers[0].print_msgs();
 });
 
-const writerNoInitialDataAddsData = (async () => {
+p = console.log
+const arr_equal = (a, b) => {
+  
+  const al = a.length;
+  const bl = b.length;
+
+  if (al != bl) {
+    return false;
+  }
+  for (let i = 0; i < al; i++) {
+    if (a[i] != b[i]) {
+      return false;
+    }
+  }
+  return true
+}
+
+const append_many_foreach_reader_update_reader_get = (async () => {
+  const data = [[0, 0,0,0],  [1,1,11,1,11], [2,22,222],[3,33], [4,44]];
+
   const a = new Hypercore(RAM, undefined, {name: 'Writer'});
   await a.ready();
 
@@ -66,17 +88,137 @@ const writerNoInitialDataAddsData = (async () => {
   const s2 = b.replicate(true, { keepAlive: false });
   s1.pipe(s2).pipe(s1);
   await pause();
+  for (let i = 0; i < data.length; i += 1) {
+    
+    console.log('---------------  WRITER APPEND  --------------------------', i);
+    await a.append(Buffer.from(data[i]));
+    while (true) {
+      console.log('reader check length');
+      let l = (await b.info()).length;
+      if (l == i + 1) {
+        console.log('reader length updated')
+        break
+      }
+      await pause();
+    }
+    while (true) {
+      console.log('reader try get');
+      let res = await b.get(i);
+      if (arr_equal(res, Buffer.from(data[i]))) {
+        console.log('reader get success');
+        break
+      }
+      await pause();
+    }
+  }
+
+  /* Writer and Reader both send syncs */
+  //l('\n\nsent messages\n\n')
+  l('\n\nDONEZO\n\n');
+  //l(a.replicator.peers[0].tx_msgs);
+  //l(b.replicator.peers[0].tx_msgs);
+});
+
+const clearTxCores = ([writer, reader]) => {
+  writer.replicator.peers[0].tx_msgs = [];
+  reader.replicator.peers[0].tx_msgs = [];
+  return [writer, reader]
+}
+
+const printCores = ([writer, reader]) => {
+  l('\n\nsent messages\n\n');
+  l('WRITER\n');
+  l(writer.replicator.peers[0].tx_msgs);
+  l('READER\n');
+  l(reader.replicator.peers[0].tx_msgs);
+  return [writer, reader]
+}
+
+const zeroBlocks = (async () => {
+  const a = new Hypercore(RAM, undefined, {name: 'Writer'});
+  await a.ready();
+
+  const b = new Hypercore(RAM, a.key, {name: 'Reader'});
+  await b.ready();
+
+  const s1 = a.replicate(false, { keepAlive: false });
+  const s2 = b.replicate(true, { keepAlive: false });
+  s1.pipe(s2).pipe(s1);
+  await pause();
+  await b.update({wait: true});
+  await pause();
+  return [a, b];
+});
+
+
+const zeroBlocksNoUp = (async () => {
+  const a = new Hypercore(RAM, undefined, {name: 'Writer'});
+  await a.ready();
+
+  const b = new Hypercore(RAM, a.key, {name: 'Reader'});
+  await b.ready();
+
+  const s1 = a.replicate(false, { keepAlive: false });
+  const s2 = b.replicate(true, { keepAlive: false });
+  s1.pipe(s2).pipe(s1);
+  await pause();
+  return [a, b];
+});
+
+
+
+const oneBlocksNoUp = (async () => {
+ const [a, b] = await zeroBlocks();
+
   await a.append('0');
   await pause();
+
+  while (true) {
+    if (b.length == 1) {
+      break
+    }
+    await pause();
+  }
+  return [a, b]
+});
+const oneBlocks = (async () => {
+ const [a, b] = await zeroBlocks();
+
+  await a.append('0');
+  await pause();
+
+  while (true) {
+    await b.update({wait: true});
+    if (b.length == 1) {
+      break
+    }
+    await pause();
+  }
+  return [a, b]
+});
+
+const twoBlocks = (async () => {
+  const [a, b] = await oneBlocks();
+
+  await a.append('1');
+  while (true) {
+    await b.update({wait: true});
+    if (b.length == 2) {
+      break
+    }
+    await pause();
+  }
   /* Writer and Reader both send syncs */
   l('\n\nsent messages\n\n')
   l(a.replicator.peers[0].tx_msgs);
   l(b.replicator.peers[0].tx_msgs);
   await pause();
 });
+
 
 (async () => {
   //await noInitialData();
-  await writerWithInitialData();
-  //await writerNoInitialDataAddsData();
+  //await one_block_before();
+  //await initial_sync();
+  await append_many_foreach_reader_update_reader_get();
 })()
