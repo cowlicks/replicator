@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "main": "index.js",
   "license": "MIT",
+  "scripts": {
+    "t": "node index.js"
+  },
   "dependencies": {
     "hyperbee": "^2.18.1",
     "hypercore": "file:../../../../../js/core",

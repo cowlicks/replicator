@@ -76,7 +76,8 @@ key = {key};
 }
 
 pub struct JsContext {
-    /// needs to be held so working directory is not dropped
+    /// needs to be held until the working directory should be dropped
+    #[allow(dead_code)]
     pub dir: TempDir,
     pub stdin: async_process::ChildStdin,
     pub stdout: Bytes<async_process::ChildStdout>,
