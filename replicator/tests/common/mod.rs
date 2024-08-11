@@ -11,7 +11,7 @@ use futures_lite::StreamExt;
 use hypercore::PartialKeypair;
 use replicator::{Replicate, ReplicatorError};
 use tempfile::TempDir;
-use utils::{HcTraits, SharedCore};
+use utils::SharedCore;
 
 pub mod js;
 
@@ -159,9 +159,9 @@ pub fn serialize_public_key(key: &PartialKeypair) -> String {
     hex::encode(key.public.as_bytes())
 }
 
-pub async fn run_replicate<T: HcTraits + 'static>(
+pub async fn run_replicate(
     listener: TcpListener,
-    core: SharedCore<T>,
+    core: SharedCore,
 ) -> std::result::Result<(), ReplicatorError> {
     let mut incoming = listener.incoming();
     let Some(Ok(stream)) = incoming.next().await else {
