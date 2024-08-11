@@ -14,8 +14,6 @@ const logBlue = f => {
   process.stdout.write('\x1b[0m');
   return out;
 }
-const l = (...x) => [console.log(...x), x[0]][1];
-
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const pause = () => sleep(500);
 
@@ -30,12 +28,6 @@ const initial_sync = (async () => {
   s1.pipe(s2).pipe(s1);
 
   await pause();
-  await pause();
-  await pause();
-  l('\n\nWriter messages\n\n')
-  a.replicator.peers[0].print_msgs();
-  l('\n\nREADER messages\n\n')
-  b.replicator.peers[0].print_msgs();
 });
 
 const one_block_before = (async () => {
@@ -51,14 +43,8 @@ const one_block_before = (async () => {
   const s2 = b.replicate(true, { keepAlive: false });
   s1.pipe(s2).pipe(s1);
   await pause();
-
-  l('\n\nWriter messages\n\n')
-  a.replicator.peers[0].print_msgs();
-  l('\n\nREADER messages\n\n')
-  b.replicator.peers[0].print_msgs();
 });
 
-p = console.log
 const arr_equal = (a, b) => {
   
   const al = a.length;
@@ -111,28 +97,7 @@ const append_many_foreach_reader_update_reader_get = (async () => {
       await pause();
     }
   }
-
-  /* Writer and Reader both send syncs */
-  //l('\n\nsent messages\n\n')
-  l('\n\nDONEZO\n\n');
-  //l(a.replicator.peers[0].tx_msgs);
-  //l(b.replicator.peers[0].tx_msgs);
 });
-
-const clearTxCores = ([writer, reader]) => {
-  writer.replicator.peers[0].tx_msgs = [];
-  reader.replicator.peers[0].tx_msgs = [];
-  return [writer, reader]
-}
-
-const printCores = ([writer, reader]) => {
-  l('\n\nsent messages\n\n');
-  l('WRITER\n');
-  l(writer.replicator.peers[0].tx_msgs);
-  l('READER\n');
-  l(reader.replicator.peers[0].tx_msgs);
-  return [writer, reader]
-}
 
 const zeroBlocks = (async () => {
   const a = new Hypercore(RAM, undefined, {name: 'Writer'});
@@ -208,10 +173,6 @@ const twoBlocks = (async () => {
     }
     await pause();
   }
-  /* Writer and Reader both send syncs */
-  l('\n\nsent messages\n\n')
-  l(a.replicator.peers[0].tx_msgs);
-  l(b.replicator.peers[0].tx_msgs);
   await pause();
 });
 
