@@ -2,11 +2,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_std::sync::{Arc, Mutex};
 use hypercore::{generate_signing_key, Hypercore, HypercoreBuilder, PartialKeypair, Storage};
-use random_access_memory::RandomAccessMemory;
 
-pub use replicator::HcTraits;
-
-pub type SharedCore<T> = Arc<Mutex<Hypercore<T>>>;
+pub type SharedCore = Arc<Mutex<Hypercore>>;
 
 pub fn make_reader_and_writer_keys() -> (PartialKeypair, PartialKeypair) {
     let signing_key = generate_signing_key();
@@ -19,7 +16,7 @@ pub fn make_reader_and_writer_keys() -> (PartialKeypair, PartialKeypair) {
     (reader_key, writer_key)
 }
 
-pub async fn ram_core(key: Option<&PartialKeypair>) -> SharedCore<RandomAccessMemory> {
+pub async fn ram_core(key: Option<&PartialKeypair>) -> SharedCore {
     let builder = HypercoreBuilder::new(Storage::new_memory().await.unwrap());
     let builder = match key {
         Some(key) => builder.key_pair(key.clone()),
