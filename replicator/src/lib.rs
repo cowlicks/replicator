@@ -19,6 +19,9 @@
 // (reader here) is 2. writer got remote length from readers last sync message.
 // but that message in reader took the length from a data message from writer. it is
 // data.upgrade.length.
+#[cfg(test)]
+mod test;
+
 use std::{fmt::Debug, marker::Unpin};
 
 use async_std::{
