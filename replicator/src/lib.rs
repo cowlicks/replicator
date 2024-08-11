@@ -24,6 +24,7 @@ mod test;
 
 use std::{fmt::Debug, marker::Unpin};
 
+use async_channel::Receiver;
 use async_std::{
     sync::{Arc, Mutex, RwLock},
     task::spawn,
@@ -60,8 +61,8 @@ macro_rules! r {
     };
 }
 
-macro_rules! name {
-    ($core:tt) => {
+macro_rules! reader_or_writer {
+    ($core:ident) => {
         if is_writer($core.clone()).await {
             "Writer"
         } else {
@@ -158,12 +159,12 @@ impl Peer {
     async fn start_message_loop(&self, is_initiator: bool) -> Result<(), ReplicatorError> {
         let key = self.core.lock().await.key_pair().public.to_bytes().clone();
         let this_dkey = discovery_key(&key);
-        let name = "snthsth";
-        //let name = name!(self.core);
+        let core = self.core.clone();
+        let name = reader_or_writer!(core);
         let protocol = self.protocol.clone();
         while let Some(Ok(event)) = {
             // this block is just here to release the `.write()` lock
-            let p = protocol.write().await.next().await;
+            let p = protocol.write().await._next().await;
             p
         } {
             info!("\n\t{name} Proto RX:\n\t{:#?}", event);
@@ -182,7 +183,7 @@ impl Peer {
                 }
                 Event::Channel(channel) => {
                     if this_dkey == *channel.discovery_key() {
-                        onpeer(self.core.clone(), channel).await?;
+                        onpeer(core.clone(), channel).await?;
                     } else {
                         error!("Wrong discovery key?");
                     }
@@ -195,10 +196,17 @@ impl Peer {
     }
 }
 
-#[allow(private_bounds)]
+pub struct HcReplicator {
+    core: SharedCore,
+    peers: Vec<ShareRw<Peer>>,
+}
+
 impl HcReplicator {
     pub fn new(core: SharedCore) -> Self {
-        Self { core }
+        Self {
+            core,
+            peers: vec![],
+        }
     }
 
     #[allow(private_bounds)]
@@ -225,9 +233,9 @@ impl HcReplicator {
         is_initiator: bool,
     ) -> Result<(), ReplicatorError> {
         let peer = self.add_peer(stream, is_initiator).await?;
+        peer.read().await.listen_to_channel_messages().await;
         spawn(async move {
-            peer.listen_to_channel_messages().await;
-            peer.start_message_loop(is_initiator).await?;
+            peer.read().await.start_message_loop(is_initiator).await?;
             Ok::<(), ReplicatorError>(())
         });
         Ok(())
@@ -238,7 +246,7 @@ async fn initiate_sync(
     peer_state: ShareRw<PeerState>,
     channel: &mut Channel,
 ) -> Result<(), ReplicatorError> {
-    let name = name!(core);
+    let name = reader_or_writer!(core);
     let info = lk!(core).info();
     if info.fork != peer_state.read().await.remote_fork {
         peer_state.write().await.can_upgrade = false;
@@ -317,7 +325,7 @@ async fn onmessage(
     mut channel: Channel,
     message: Message,
 ) -> Result<(), ReplicatorError> {
-    let name = name!(core);
+    let name = reader_or_writer!(core);
     match message {
         Message::Synchronize(message) => {
             let peer_length_changed = message.length != r!(peer_state).remote_length;
@@ -405,9 +413,11 @@ async fn onmessage(
             trace!("Got Data message Data {{...}}");
             let (_old_info, _applied, new_info, request_block) = {
                 let old_info = lk!(core).info();
+
                 let proof = message.clone().into_proof();
                 let applied = lk!(core).verify_and_apply_proof(&proof).await?;
                 let new_info = lk!(core).info();
+
                 let request_block: Option<RequestBlock> = if let Some(upgrade) = &message.upgrade {
                     // When getting the initial upgrade, send a request for the first missing block
                     if old_info.length < upgrade.length {
@@ -481,6 +491,9 @@ async fn onmessage(
             info!("\n\t{name} Channel TX:\n\t{messages:#?}");
             channel.send_batch(&messages).await.unwrap();
         }
+        Message::Range(r) => {
+            dbg!(r);
+        }
         _ => {}
     };
     Ok(())
@@ -513,133 +526,5 @@ impl Default for PeerState {
             remote_synced: false,
             length_acked: 0,
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-
-    use async_std::task::{sleep, JoinHandle};
-    use hypercore_protocol::Duplex;
-    use piper::pipe;
-    use std::time::Duration;
-
-    use hypercore::{generate_signing_key, HypercoreBuilder, PartialKeypair, Storage};
-
-    use super::*;
-
-    static PIPE_CAPACITY: usize = 1024 * 1024 * 4;
-
-    fn make_reader_and_writer_keys() -> (PartialKeypair, PartialKeypair) {
-        let signing_key = generate_signing_key();
-        let writer_key = PartialKeypair {
-            public: signing_key.verifying_key(),
-            secret: Some(signing_key),
-        };
-        let mut reader_key = writer_key.clone();
-        reader_key.secret = None;
-        (reader_key, writer_key)
-    }
-    async fn create_connected_cores<A: AsRef<[u8]>, B: AsRef<[A]>>(
-        initial_data: B,
-    ) -> Result<
-        (
-            (SharedCore, JoinHandle<Result<(), ReplicatorError>>),
-            (SharedCore, JoinHandle<Result<(), ReplicatorError>>),
-        ),
-        ReplicatorError,
-    > {
-        let (reader_key, writer_key) = make_reader_and_writer_keys();
-        let writer_core = Arc::new(Mutex::new(
-            HypercoreBuilder::new(Storage::new_memory().await.unwrap())
-                .key_pair(writer_key)
-                .build()
-                .await
-                .unwrap(),
-        ));
-
-        // add data
-        lk!(writer_core).append_batch(initial_data).await.unwrap();
-
-        let reader_core = Arc::new(Mutex::new(
-            HypercoreBuilder::new(Storage::new_memory().await.unwrap())
-                .key_pair(reader_key)
-                .build()
-                .await
-                .unwrap(),
-        ));
-
-        let (read_from_writer, write_to_writer) = pipe(PIPE_CAPACITY);
-        let (read_from_reader, write_to_reader) = pipe(PIPE_CAPACITY);
-
-        let stream_to_reader = Duplex::new(read_from_writer, write_to_reader);
-        let stream_to_writer = Duplex::new(read_from_reader, write_to_writer);
-
-        let mut server_replicator = writer_core.clone().replicate().await?;
-        let mut client_replicator = reader_core.clone().replicate().await?;
-
-        assert_eq!(
-            writer_core.lock().await.key_pair().public,
-            reader_core.lock().await.key_pair().public
-        );
-
-        let _server =
-            spawn(async move { server_replicator.add_stream(stream_to_writer, false).await });
-        let _client =
-            spawn(async move { client_replicator.add_stream(stream_to_reader, true).await });
-
-        Ok(((writer_core, _server), (reader_core, _client)))
-    }
-
-    #[tokio::test]
-    async fn initial_data_replicated() -> Result<(), ReplicatorError> {
-        let batch: &[&[u8]] = &[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"];
-        let (_, (reader_core, _)) = create_connected_cores(batch).await?;
-        for i in 0..batch.len() {
-            loop {
-                if lk!(reader_core).info().length as usize >= i + 1 {
-                    if let Some(block) = lk!(reader_core).get(i as u64).await? {
-                        if block == batch[i].to_vec() {
-                            break;
-                        }
-                    }
-                }
-                sleep(Duration::from_millis(100)).await;
-            }
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn initial_sync() -> Result<(), ReplicatorError> {
-        let _ = create_connected_cores(vec![] as Vec<&[u8]>).await?;
-        Ok(())
-    }
-    #[tokio::test]
-    async fn new_data_replicated() -> Result<(), ReplicatorError> {
-        let data: Vec<&[u8]> = vec![b"hi\n", b"ola\n", b"hello\n", b"mundo\n"];
-        let ((writer_core, _), (reader_core, _)) =
-            create_connected_cores(vec![] as Vec<&[u8]>).await?;
-        for i in 0..data.len() {
-            dbg!(i);
-            if i == 2 {
-                println!("START THE LOGS");
-            }
-            writer_core.lock().await.append(data[i as usize]).await?;
-            println!("Block i = {i} appended [{:?}]", data[i as usize]);
-            while (lk!(reader_core).info().length as usize) < i + 1 {
-                sleep(Duration::from_millis(10)).await;
-            }
-            let len = lk!(reader_core).info().length;
-            assert_eq!(len as usize, i + 1);
-            loop {
-                let block = lk!(reader_core).get(i as u64).await?;
-                if block == Some(data[i as usize].to_vec()) {
-                    break;
-                }
-                sleep(Duration::from_millis(100)).await;
-            }
-        }
-        Ok(())
     }
 }
