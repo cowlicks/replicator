@@ -296,6 +296,28 @@ async fn core_event_loop(
     Ok(())
 }
 
+async fn on_get_event_loop(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
+    let mut on_get = core.lock().await.on_get_subscribe();
+    while let Ok((index, tx)) = on_get.recv().await {
+        trace!("got core upgrade event. Notifying peers");
+        let block = RequestBlock {
+            index,
+            nodes: core.lock().await.missing_nodes(index).await?,
+        };
+        let msg = Message::Request(Request {
+            fork: core.lock().await.info().fork,
+            id: block.index + 1,
+            block: Some(block),
+            hash: None,
+            seek: None,
+            upgrade: None,
+        });
+
+        channel.send_batch(&[msg]).await?;
+    }
+    Ok(())
+}
+
 pub async fn onpeer(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
     let peer_state = Arc::new(RwLock::new(PeerState::default()));
 
@@ -306,6 +328,9 @@ pub async fn onpeer(core: SharedCore, mut channel: Channel) -> Result<(), Replic
         peer_state.clone(),
         channel.clone(),
     ));
+
+    let _on_get_loop = spawn(on_get_event_loop(core.clone(), channel.clone()));
+
     let _channel_rx_loop = spawn(async move {
         while let Some(message) = channel.next().await {
             let result =
