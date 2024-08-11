@@ -40,15 +40,11 @@ use hypercore_protocol::{
     Channel, Event, Message, Protocol, ProtocolBuilder,
 };
 
-trait StreamTraits: AsyncRead + AsyncWrite + Send + Unpin + 'static {}
-impl<S: AsyncRead + AsyncWrite + Send + Unpin + 'static> StreamTraits for S {}
+trait StreamTraits: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static {}
+impl<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static> StreamTraits for S {}
 
 type ShareRw<T> = Arc<RwLock<T>>;
 type SharedCore = Arc<Mutex<Hypercore>>;
-
-async fn is_writer(c: SharedCore) -> bool {
-    lk!(c).key_pair().secret.is_some()
-}
 
 #[macro_export]
 macro_rules! lk {
@@ -124,20 +120,44 @@ impl Replicate for SharedCore {
     }
 }
 
-pub struct HcReplicator {
-    core: SharedCore,
+#[async_trait::async_trait]
+trait ProtoMethods: Debug + Send + Sync {
+    async fn open(&mut self, key: Key) -> std::io::Result<()>;
+    fn receiver_for_all_channel_messages(&self) -> Receiver<Message>;
+    async fn _next(&mut self) -> Option<std::io::Result<Event>>;
 }
 
-#[allow(private_bounds)] // TODO rmme
-pub struct Peer<IO: StreamTraits> {
+#[async_trait::async_trait]
+impl<S: StreamTraits> ProtoMethods for Protocol<S> {
+    async fn open(&mut self, key: Key) -> std::io::Result<()> {
+        Protocol::open(&mut self, key).await
+    }
+    fn receiver_for_all_channel_messages(&self) -> Receiver<Message> {
+        Protocol::receiver_for_all_channel_messages(&self)
+    }
+    async fn _next(&mut self) -> Option<std::io::Result<Event>> {
+        futures_lite::StreamExt::next(&mut self).await
+    }
+}
+
+pub struct Peer {
     core: SharedCore,
-    protocol: ShareRw<Protocol<IO>>,
+    protocol: ShareRw<Box<dyn ProtoMethods>>,
     message_buff: ShareRw<Vec<Message>>,
 }
 
-#[allow(private_bounds)] // TODO rmme
-impl<IO: StreamTraits> Peer<IO> {
-    fn new(core: SharedCore, protocol: ShareRw<Protocol<IO>>) -> Self {
+impl Debug for Peer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Peer")
+            //.field("core", &self.core)
+            //.field("protocol", &self.protocol)
+            .field("message_buff", &self.message_buff)
+            .finish()
+    }
+}
+
+impl Peer {
+    fn new(core: SharedCore, protocol: ShareRw<Box<dyn ProtoMethods>>) -> Self {
         Self {
             core,
             protocol,
@@ -154,7 +174,6 @@ impl<IO: StreamTraits> Peer<IO> {
         let message_buff = self.message_buff.clone();
         spawn(async move {
             while let Ok(msg) = receiver.recv().await {
-                println!("{msg}");
                 message_buff.write().await.push(msg);
             }
         });
@@ -206,17 +225,25 @@ impl HcReplicator {
         Self { core }
     }
 
+    #[allow(private_bounds)]
     pub async fn add_peer<S: StreamTraits>(
         &mut self,
         stream: S,
         is_initiator: bool,
-    ) -> Result<Peer<S>, ReplicatorError> {
+    ) -> Result<ShareRw<Peer>, ReplicatorError> {
         let core = self.core.clone();
         let protocol = ProtocolBuilder::new(is_initiator).connect(stream);
-        Ok(Peer::new(core, Arc::new(RwLock::new(protocol))))
+
+        let peer = Arc::new(RwLock::new(Peer::new(
+            core,
+            Arc::new(RwLock::new(Box::new(protocol))),
+        )));
+        self.peers.push(peer.clone());
+        Ok(peer)
     }
 
-    pub async fn add_stream<S: StreamTraits + Sync>(
+    #[allow(private_bounds)]
+    pub async fn add_stream<S: StreamTraits>(
         &mut self,
         stream: S,
         is_initiator: bool,
@@ -340,7 +367,6 @@ async fn onmessage(
                 let msg = Synchronize {
                     fork: info.fork,
                     length: info.length,
-                    // HERE
                     remote_length: r!(peer_state).remote_length,
                     can_upgrade: r!(peer_state).can_upgrade,
                     uploading: true,
@@ -375,6 +401,7 @@ async fn onmessage(
                 channel.send_batch(&messages).await?;
             }
         }
+
         Message::Request(message) => {
             trace!("Got Request message {message:?}");
             let (info, proof) = {
@@ -385,6 +412,7 @@ async fn onmessage(
                 //TODO .await?;
                 (lk!(core).info(), proof)
             };
+
             if let Some(proof) = proof {
                 let msg = Data {
                     request: message.id,
@@ -394,7 +422,6 @@ async fn onmessage(
                     seek: proof.seek,
                     upgrade: proof.upgrade,
                 };
-                info!("\n\t{name} Channel TX:\n\t{:#?}", DebugData(msg.clone()));
                 channel.send(Message::Data(msg)).await?;
             }
         }
@@ -447,6 +474,7 @@ async fn onmessage(
             };
 
             let mut messages: Vec<Message> = vec![];
+
             if let Some(upgrade) = &message.upgrade {
                 let new_length = upgrade.length;
                 let remote_length = if new_info.fork == r!(peer_state).remote_fork {
