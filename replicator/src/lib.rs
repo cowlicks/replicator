@@ -33,11 +33,11 @@ use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
 use thiserror::Error;
 use tracing::{error, info, trace, warn};
 
-use hypercore::{DataUpgrade, Hypercore, HypercoreError, RequestBlock, RequestUpgrade};
+use hypercore::{Hypercore, HypercoreError, RequestBlock, RequestUpgrade};
 use hypercore_protocol::{
     discovery_key,
     schema::{Data, Range, Request, Synchronize},
-    Channel, Event, Message, Protocol, ProtocolBuilder,
+    Channel, Event, Key, Message, Protocol, ProtocolBuilder,
 };
 
 trait StreamTraits: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static {}
@@ -70,32 +70,8 @@ macro_rules! name {
     };
 }
 
-struct DebugUpgrade(DataUpgrade);
-impl Debug for DebugUpgrade {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let d = &self.0;
-        f.debug_struct("DUpgrade")
-            .field("start", &d.start)
-            .field("length", &d.length)
-            //.field("nodes", &d.nodes)
-            .finish()
-    }
-}
-
-struct DebugData(Data);
-impl Debug for DebugData {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let d = &self.0;
-        let u = match &d.upgrade {
-            Some(u) => Some(DebugUpgrade(u.clone())),
-            None => None,
-        };
-        f.debug_struct("DData")
-            .field("request", &d.request)
-            .field("fork", &d.fork)
-            .field("upgrade", &u)
-            .finish()
-    }
+async fn is_writer(c: SharedCore) -> bool {
+    lk!(c).key_pair().secret.is_some()
 }
 
 #[derive(Error, Debug)]
