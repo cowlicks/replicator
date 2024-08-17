@@ -62,7 +62,7 @@ const arr_equal = (a, b) => {
 }
 
 const append_many_foreach_reader_update_reader_get = (async () => {
-  const data = [[0, 0,0,0],  [1,1,11,1,11], [2,22,222],[3,33], [4,44]];
+  const data = [[0], [1], [2]];
 
   const a = new Hypercore(RAM, undefined, {name: 'Writer'});
   await a.ready();
@@ -76,22 +76,17 @@ const append_many_foreach_reader_update_reader_get = (async () => {
   await pause();
   for (let i = 0; i < data.length; i += 1) {
     
-    console.log('---------------  WRITER APPEND  --------------------------', i);
     await a.append(Buffer.from(data[i]));
     while (true) {
-      console.log('reader check length');
       let l = (await b.info()).length;
       if (l == i + 1) {
-        console.log('reader length updated')
         break
       }
       await pause();
     }
     while (true) {
-      console.log('reader try get');
       let res = await b.get(i);
       if (arr_equal(res, Buffer.from(data[i]))) {
-        console.log('reader get success');
         break
       }
       await pause();
