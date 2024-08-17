@@ -351,6 +351,7 @@ async fn onmessage(
     message: Message,
 ) -> Result<(), ReplicatorError> {
     let name = reader_or_writer!(core);
+    trace!("{name} onmessage {}", message.kind());
     match message {
         Message::Synchronize(message) => {
             let peer_length_changed = message.length != r!(peer_state).remote_length;
@@ -514,9 +515,6 @@ async fn onmessage(
             }
             info!("\n\t{name} Channel TX:\n\t{messages:#?}");
             channel.send_batch(&messages).await.unwrap();
-        }
-        Message::Range(r) => {
-            dbg!(r);
         }
         _ => {}
     };
