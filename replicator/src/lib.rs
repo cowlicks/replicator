@@ -486,8 +486,8 @@ async fn onmessage(
 
             let mut messages: Vec<Message> = vec![];
 
-            if let Some(upgrade) = &message.upgrade {
-                let new_length = upgrade.length;
+            // If we got an upgrade send a Sync
+            if message.upgrade.is_some() {
                 let remote_length = if new_info.fork == r!(peer_state).remote_fork {
                     r!(peer_state).remote_length
                 } else {
@@ -495,8 +495,7 @@ async fn onmessage(
                 };
                 messages.push(Message::Synchronize(Synchronize {
                     fork: new_info.fork,
-                    length: new_length,
-                    // HERE
+                    length: new_info.length,
                     remote_length,
                     can_upgrade: false,
                     uploading: true,
