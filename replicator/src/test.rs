@@ -10,7 +10,7 @@ use super::*;
 static PIPE_CAPACITY: usize = 1024 * 1024 * 4;
 
 async fn pause() {
-    sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(5)).await;
 }
 
 async fn get_messages(rep: &HcReplicator) -> Vec<Message> {
@@ -208,35 +208,25 @@ async fn one_before_one_after_get() -> Result<(), ReplicatorError> {
 
 #[tokio::test]
 async fn append_many_foreach_reader_update_reader_get() -> Result<(), ReplicatorError> {
-    let data: Vec<&[u8]> = vec![&[0], &[1], &[2], &[3]];
+    let data: Vec<Vec<u8>> = (0..100).into_iter().map(|x| vec![x as u8]).collect();
     let ((writer_core, _), (reader_core, _)) = create_connected_cores(vec![] as Vec<&[u8]>).await?;
-    pause().await;
-    pause().await;
-    pause().await;
     for i in 0..data.len() {
         // add new data to writer
-        println!("QQ ------------------------- Do APPEND: {i} ---------------------");
-        writer_core.lock().await.append(data[i as usize]).await?;
+        writer_core.lock().await.append(&data[i as usize]).await?;
 
         // wait for reader's length to update
-        println!("QQ check length i = {}", i + 1);
         while (lk!(reader_core).info().length as usize) != i + 1 {
-            println!("attempt to check length");
             pause().await;
         }
-        println!("QQ len updated to {}", i + 1);
         assert_eq!(reader_core.lock().await.info().length as usize, i + 1);
 
         // wait for reader to `.get(i)`
         loop {
-            println!("QQ try get {i}");
-            let block = reader_core.lock().await.get(i as u64).await?;
-            if block == Some(data[i as usize].to_vec()) {
-                println!("QQ get got {i}");
-                break;
+            if let Some(block) = reader_core.lock().await.get(i as u64).await? {
+                if block == vec![i as u8] {
+                    break;
+                }
             }
-            s += 1;
-            pause().await;
         }
     }
     Ok(())
