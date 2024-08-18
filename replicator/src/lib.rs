@@ -1,24 +1,4 @@
 //! trait for replication
-// currently this is just a  one-to-one hc replication
-// `Message`'s are sent over the "channel" in  `Event::Channel(channel)`.
-// These `Event` things come from the `hypercore_protocol::Protocol` stream, which comes from outside.
-// `Command` seems to be a way to pass something from a `Channel` stream to the `Protocol` stream.
-
-// TODO add an integration test with a remote JS hypercore. Run a js hypercore and bind it to a
-// local address somehow... How? Check out the code use for testing here:
-// https://github.com/holepunchto/hypercore/blob/3fda699f306fa3f4781ad66ea13ea0df108a48cd/test/replicate.js
-// and the code in the hypercore_protocol rs examples:
-// https://github.com/datrs/hypercore-protocol-rs/blob/54d4d91c3fb770688a349e6974eeeff0d50c7c8a/examples-nodejs/replicate.js
-//
-// set up rust client js server
-// make js server
-// copy in hb/tests/common/ stuff and adapt it
-// TODO next add a test for a Protocol with Event close
-//
-// problem reader gets sync from writer but Sync.remote_length = 1 which isn't right. remote
-// (reader here) is 2. writer got remote length from readers last sync message.
-// but that message in reader took the length from a data message from writer. it is
-// data.upgrade.length.
 #[cfg(test)]
 mod test;
 
