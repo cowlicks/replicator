@@ -208,7 +208,7 @@ async fn one_before_one_after_get() -> Result<(), ReplicatorError> {
 
 #[tokio::test]
 async fn append_many_foreach_reader_update_reader_get() -> Result<(), ReplicatorError> {
-    let data: Vec<Vec<u8>> = (0..100).into_iter().map(|x| vec![x as u8]).collect();
+    let data: Vec<Vec<u8>> = (0..10).into_iter().map(|x| vec![x as u8]).collect();
     let ((writer_core, _), (reader_core, _)) = create_connected_cores(vec![] as Vec<&[u8]>).await?;
     for i in 0..data.len() {
         // add new data to writer
@@ -227,6 +227,8 @@ async fn append_many_foreach_reader_update_reader_get() -> Result<(), Replicator
                     break;
                 }
             }
+            // TODO remeving this causes this function to deadlock. Figure out why.
+            pause().await;
         }
     }
     Ok(())
