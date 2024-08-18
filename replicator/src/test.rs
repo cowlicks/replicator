@@ -1,3 +1,11 @@
+// TODO in several tests we use a loop where we run: core.get(i)
+// Then `pause().await` for a time fater if we don't have the block.
+// This loop is where we wait for the core to get updated.
+// However,  if we pause for too short a time, then we never receive the block.
+// Why? I should understand and/or fix this.
+// In this loop, where there is the `.get(i)`, the reader requests the data
+// then writer responds with the data,
+// but the reader does not receive this message
 use async_std::task::sleep;
 use hypercore_protocol::{schema::Synchronize, Duplex, Message};
 use piper::pipe;
@@ -10,7 +18,7 @@ use super::*;
 static PIPE_CAPACITY: usize = 1024 * 1024 * 4;
 
 async fn pause() {
-    sleep(Duration::from_millis(5)).await;
+    sleep(Duration::from_millis(50)).await;
 }
 
 async fn get_messages(rep: &HcReplicator) -> Vec<Message> {
@@ -96,8 +104,6 @@ async fn initial_sync() -> Result<(), ReplicatorError> {
         }
     }
     pause().await;
-    pause().await;
-    pause().await;
     let sync_msg = Message::Synchronize(Synchronize {
         fork: 0,
         length: 0,
@@ -156,24 +162,17 @@ async fn one_block_before_get() -> Result<(), ReplicatorError> {
     }
     println!("\nWriter\n");
     let peer = &writer_replicator.peers[0].read().await;
-    let msgs = peer.message_buff.read().await;
-    for _m in msgs.iter() {
-        //println!("\n{m:?}");
-    }
-    //dbg!(msgs.len());
+    let _ = peer.message_buff.read().await;
 
     println!("\nReader\n");
     let peer = &_reader_replicator.peers[0].read().await;
-    let msgs = peer.message_buff.read().await;
-    for _m in msgs.iter() {
-        //println!("\n{m:?}");
-    }
+    let _ = peer.message_buff.read().await;
     assert_eq!(reader_core.lock().await.get(0).await?, Some(b"0".to_vec()));
     Ok(())
 }
 
 #[tokio::test]
-async fn one_block_after() -> Result<(), ReplicatorError> {
+async fn one_block_after_might_lock() -> Result<(), ReplicatorError> {
     let ((writer_core, _), (reader_core, _)) = create_connected_cores(vec![] as Vec<&[u8]>).await?;
     writer_core.lock().await.append(b"0").await?;
     loop {
@@ -227,7 +226,6 @@ async fn append_many_foreach_reader_update_reader_get() -> Result<(), Replicator
                     break;
                 }
             }
-            // TODO remeving this causes this function to deadlock. Figure out why.
             pause().await;
         }
     }
