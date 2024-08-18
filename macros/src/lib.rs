@@ -1,3 +1,4 @@
+use proc_macro::TokenStream;
 use syn;
 
 #[proc_macro_attribute]
