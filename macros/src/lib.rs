@@ -1,5 +1,4 @@
-use proc_macro::*;
-use syn;
+use proc_macro::TokenStream;
 
 #[proc_macro_attribute]
 pub fn start_func_with(code: TokenStream, input: TokenStream) -> TokenStream {

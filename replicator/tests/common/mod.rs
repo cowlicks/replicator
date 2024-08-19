@@ -11,7 +11,7 @@ use futures_lite::StreamExt;
 use hypercore::PartialKeypair;
 use replicator::{Replicate, ReplicatorError};
 use tempfile::TempDir;
-use utils::{HcTraits, SharedCore};
+use utils::SharedCore;
 
 pub mod js;
 
@@ -42,9 +42,7 @@ pub(crate) use join_paths;
 
 #[allow(dead_code)]
 pub fn run_command(cmd: &str) -> Result<Output> {
-    Ok(check_cmd_output(
-        Command::new("sh").arg("-c").arg(cmd).output()?,
-    )?)
+    check_cmd_output(Command::new("sh").arg("-c").arg(cmd).output()?)
 }
 pub fn git_root() -> Result<String> {
     let x = Command::new("sh")
@@ -110,7 +108,8 @@ pub fn run_code(
 pub fn _run_make_from_with(dir: &str, arg: &str) -> Result<Output> {
     let path = join_paths!(git_root()?, dir);
     let cmd = format!("cd {path} && flock make.lock make {arg} && rm -f make.lock ");
-    let out = check_cmd_output(Command::new("sh").arg("-c").arg(cmd).output()?)?;
+    let cmd_res = Command::new("sh").arg("-c").arg(cmd).output()?;
+    let out = check_cmd_output(cmd_res)?;
     Ok(out)
 }
 
@@ -159,14 +158,15 @@ pub fn serialize_public_key(key: &PartialKeypair) -> String {
     hex::encode(key.public.as_bytes())
 }
 
-pub async fn run_replicate<T: HcTraits + 'static>(
+pub async fn run_replicate(
     listener: TcpListener,
-    core: SharedCore<T>,
+    core: SharedCore,
 ) -> std::result::Result<(), ReplicatorError> {
     let mut incoming = listener.incoming();
     let Some(Ok(stream)) = incoming.next().await else {
         panic!("No connections");
     };
 
-    Ok(core.replicate(stream, false).await?)
+    let mut replicator = core.replicate().await?;
+    replicator.add_stream(stream, false).await
 }

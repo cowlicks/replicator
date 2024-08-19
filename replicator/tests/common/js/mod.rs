@@ -15,7 +15,7 @@ pub static RUN_REPL_CODE: &str = "const { repl } = require('./repl.js');
 await repl();";
 
 pub fn require_js_data() -> Result<(), Box<dyn std::error::Error>> {
-    let _ = _run_make_from_with(REL_PATH_TO_JS_DIR, "")?;
+    let _ = _run_make_from_with(REL_PATH_TO_JS_DIR, "node_modules")?;
     Ok(())
 }
 
@@ -58,7 +58,6 @@ fn build_command(_working_dir: &str, script_path: &str) -> String {
 }
 
 static CORE_NAME: &str = "core";
-
 fn ram_hypercore_prerequisite_code(key: Option<&str>, core_var_name: &str) -> String {
     let key = key.map(|k| format!("'{k}'")).unwrap_or("undefined".into());
     format!(
@@ -76,7 +75,8 @@ key = {key};
 }
 
 pub struct JsContext {
-    /// needs to be held so working directory is not dropped
+    /// needs to be held until the working directory should be dropped
+    #[allow(dead_code)]
     pub dir: TempDir,
     pub stdin: async_process::ChildStdin,
     pub stdout: Bytes<async_process::ChildStdout>,
@@ -88,7 +88,7 @@ pub fn run_js(
     code_string: &str,
     copy_dirs: Vec<String>,
 ) -> Result<JsContext, Box<dyn std::error::Error>> {
-    let (dir, mut child) = run_code(&code_string, SCRIPT_FILE_NAME, build_command, copy_dirs)?;
+    let (dir, mut child) = run_code(code_string, SCRIPT_FILE_NAME, build_command, copy_dirs)?;
     Ok(JsContext {
         dir,
         stdin: child.stdin.take().unwrap(),
@@ -117,18 +117,18 @@ await core.close();"
 }
 
 macro_rules! run_async_js_block {
-    ($stdin:expr, $eof:expr, $($arg:tt)*) => {{
-        let block = format!($($arg)*);
+    ($stdin:expr, $eof:expr, $code:tt) => {{
         let code = [
             b";(async () =>{\n",
-            block.as_bytes(),
+            $code.as_bytes(),
             b"; process.stdout.write('",
             $eof,
             b"');",
             b"})();",
-        ].concat();
+        ]
+        .concat();
         $stdin.write_all(&code).await?;
-    }}
+    }};
 }
 pub(crate) use run_async_js_block;
 
@@ -145,10 +145,10 @@ pub async fn pull_result_from_stdout(stdout: &mut Bytes<ChildStdout>, eof: &[u8]
 }
 
 macro_rules! repl {
-    ($context:expr, $($arg:tt)*) => {{
-        run_async_js_block!($context.stdin, &$context.eof, $($arg)*);
+    ($context:expr, $code:tt) => {{
+        run_async_js_block!($context.stdin, &$context.eof, $code);
         crate::common::js::pull_result_from_stdout(&mut $context.stdout, &$context.eof).await
-    }}
+    }};
 }
 pub(crate) use repl;
 
