@@ -87,10 +87,10 @@ trait ProtoMethods: Debug + Send + Sync {
 #[async_trait::async_trait]
 impl<S: StreamTraits> ProtoMethods for Protocol<S> {
     async fn open(&mut self, key: Key) -> std::io::Result<()> {
-        Protocol::open(&mut self, key).await
+        Protocol::open(self, key).await
     }
     fn receiver_for_all_channel_messages(&self) -> Receiver<Message> {
-        Protocol::receiver_for_all_channel_messages(&self)
+        Protocol::receiver_for_all_channel_messages(self)
     }
     async fn _next(&mut self) -> Option<std::io::Result<Event>> {
         futures_lite::StreamExt::next(&mut self).await
@@ -137,7 +137,7 @@ impl Peer {
     }
 
     async fn start_message_loop(&self, is_initiator: bool) -> Result<(), ReplicatorError> {
-        let key = self.core.lock().await.key_pair().public.to_bytes().clone();
+        let key = self.core.lock().await.key_pair().public.to_bytes();
         let this_dkey = discovery_key(&key);
         let core = self.core.clone();
         let name = reader_or_writer!(core);

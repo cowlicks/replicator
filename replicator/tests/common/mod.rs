@@ -42,9 +42,9 @@ pub(crate) use join_paths;
 
 #[allow(dead_code)]
 pub fn run_command(cmd: &str) -> Result<Output> {
-    Ok(check_cmd_output(
+    check_cmd_output(
         Command::new("sh").arg("-c").arg(cmd).output()?,
-    )?)
+    )
 }
 pub fn git_root() -> Result<String> {
     let x = Command::new("sh")
@@ -170,5 +170,5 @@ pub async fn run_replicate(
     };
 
     let mut replicator = core.replicate().await?;
-    Ok(replicator.add_stream(stream, false).await?)
+    replicator.add_stream(stream, false).await
 }

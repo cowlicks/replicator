@@ -23,13 +23,7 @@ async fn pause() {
 
 async fn get_messages(rep: &HcReplicator) -> Vec<Message> {
     let peer = rep.peers[0].read().await;
-    let out = peer
-        .message_buff
-        .read()
-        .await
-        .iter()
-        .map(|m| m.clone())
-        .collect();
+    let out = peer.message_buff.read().await.iter().cloned().collect();
     out
 }
 
@@ -81,8 +75,8 @@ async fn create_connected_cores<A: AsRef<[u8]>, B: AsRef<[A]>>(
         reader_core.lock().await.key_pair().public
     );
 
-    let _server = server_replicator.add_stream(stream_to_writer, true).await?;
-    let _client = client_replicator
+    server_replicator.add_stream(stream_to_writer, true).await?;
+    client_replicator
         .add_stream(stream_to_reader, false)
         .await?;
 
@@ -146,7 +140,7 @@ async fn one_block_before_get() -> Result<(), ReplicatorError> {
     for i in 0..batch.len() {
         let mut j = 0;
         loop {
-            if lk!(reader_core).info().length as usize >= i + 1 {
+            if lk!(reader_core).info().length as usize > i {
                 j += 1;
                 if j > 5 {
                     break;
@@ -207,11 +201,11 @@ async fn one_before_one_after_get() -> Result<(), ReplicatorError> {
 
 #[tokio::test]
 async fn append_many_foreach_reader_update_reader_get() -> Result<(), ReplicatorError> {
-    let data: Vec<Vec<u8>> = (0..10).into_iter().map(|x| vec![x as u8]).collect();
+    let data: Vec<Vec<u8>> = (0..10).map(|x| vec![x as u8]).collect();
     let ((writer_core, _), (reader_core, _)) = create_connected_cores(vec![] as Vec<&[u8]>).await?;
-    for i in 0..data.len() {
+    for (i, val) in data.iter().enumerate() {
         // add new data to writer
-        writer_core.lock().await.append(&data[i as usize]).await?;
+        writer_core.lock().await.append(val).await?;
 
         // wait for reader's length to update
         while (lk!(reader_core).info().length as usize) != i + 1 {

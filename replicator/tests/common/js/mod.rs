@@ -88,7 +88,7 @@ pub fn run_js(
     code_string: &str,
     copy_dirs: Vec<String>,
 ) -> Result<JsContext, Box<dyn std::error::Error>> {
-    let (dir, mut child) = run_code(&code_string, SCRIPT_FILE_NAME, build_command, copy_dirs)?;
+    let (dir, mut child) = run_code(code_string, SCRIPT_FILE_NAME, build_command, copy_dirs)?;
     Ok(JsContext {
         dir,
         stdin: child.stdin.take().unwrap(),
