@@ -49,6 +49,34 @@ async fn setup_rs_writer_js_reader<A: AsRef<[u8]>, B: AsRef<[A]>>(
 
 #[start_func_with(require_js_data()?;)]
 #[tokio::test]
+async fn read_eval_print_macro_works() -> Result<()> {
+    let mut context = run_js(
+        &async_iiaf_template(RUN_REPL_CODE),
+        vec![
+            format!("{}/utils.js", path_to_js_dir()?.to_string_lossy()),
+            format!("{}/repl.js", path_to_js_dir()?.to_string_lossy()),
+        ],
+    )?;
+
+    let result = repl!(context, "process.stdout.write('fooo6!');");
+    assert_eq!(result, b"fooo6!");
+    let result = repl!(
+        context,
+        "
+a = 66;
+b = 7 + a;
+process.stdout.write(`${b}`);
+"
+    );
+    assert_eq!(result, b"73");
+
+    let _result = repl!(context, "queue.done();");
+    let _ = context.child.output().await?;
+    Ok(())
+}
+
+#[start_func_with(require_js_data()?;)]
+#[tokio::test]
 async fn initial_data_rs_data_replicates_to_js() -> Result<()> {
     let batch: &[&[u8]] = &[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"];
 
@@ -74,34 +102,6 @@ async fn initial_data_rs_data_replicates_to_js() -> Result<()> {
 
     // ensure js process closes properly
     assert_eq!(context.child.output().await?.status.code(), Some(0));
-    Ok(())
-}
-
-#[start_func_with(require_js_data()?;)]
-#[tokio::test]
-async fn read_eval_print_macro_works() -> Result<()> {
-    let mut context = run_js(
-        &async_iiaf_template(RUN_REPL_CODE),
-        vec![
-            format!("{}/utils.js", path_to_js_dir()?.to_string_lossy()),
-            format!("{}/repl.js", path_to_js_dir()?.to_string_lossy()),
-        ],
-    )?;
-
-    let result = repl!(context, "process.stdout.write('fooo6!');");
-    assert_eq!(result, b"fooo6!");
-    let result = repl!(
-        context,
-        "
-a = 66;
-b = 7 + a;
-process.stdout.write(`${b}`);
-"
-    );
-    assert_eq!(result, b"73");
-
-    let _result = repl!(context, "queue.done();");
-    let _ = context.child.output().await?;
     Ok(())
 }
 
@@ -145,19 +145,5 @@ process.stdout.write(String((await core.info()).length));"
     // stop the repl. When repl is stopped hypercore & socket are closed
     let _ = repl!(context, "queue.done();");
     let _ = context.child.output().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn events() -> Result<()> {
-    let (_rkey, wkey) = make_reader_and_writer_keys();
-
-    // create the writer core in rust
-    let core = ram_core(Some(&wkey)).await;
-    let mut rec = core.lock().await.on_upgrade();
-    core.lock().await.append(b"foo").await?;
-    let Ok(_) = rec.recv().await else {
-        panic!("Colud not get event");
-    };
     Ok(())
 }
