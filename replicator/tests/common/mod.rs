@@ -42,9 +42,7 @@ pub(crate) use join_paths;
 
 #[allow(dead_code)]
 pub fn run_command(cmd: &str) -> Result<Output> {
-    check_cmd_output(
-        Command::new("sh").arg("-c").arg(cmd).output()?,
-    )
+    check_cmd_output(Command::new("sh").arg("-c").arg(cmd).output()?)
 }
 pub fn git_root() -> Result<String> {
     let x = Command::new("sh")
