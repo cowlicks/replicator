@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "hyperbee": "^2.18.1",
-    "hypercore": "file:../../../../../js/core",
+    "hypercore": "^10.37.18",
     "random-access-file": "^4.0.7",
     "random-access-memory": "^6.2.1"
   }
