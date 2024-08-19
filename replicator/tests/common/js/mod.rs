@@ -58,7 +58,6 @@ fn build_command(_working_dir: &str, script_path: &str) -> String {
 }
 
 static CORE_NAME: &str = "core";
-
 fn ram_hypercore_prerequisite_code(key: Option<&str>, core_var_name: &str) -> String {
     let key = key.map(|k| format!("'{k}'")).unwrap_or("undefined".into());
     format!(
@@ -118,18 +117,18 @@ await core.close();"
 }
 
 macro_rules! run_async_js_block {
-    ($stdin:expr, $eof:expr, $($arg:tt)*) => {{
-        let block = format!($($arg)*);
+    ($stdin:expr, $eof:expr, $code:tt) => {{
         let code = [
             b";(async () =>{\n",
-            block.as_bytes(),
+            $code.as_bytes(),
             b"; process.stdout.write('",
             $eof,
             b"');",
             b"})();",
-        ].concat();
+        ]
+        .concat();
         $stdin.write_all(&code).await?;
-    }}
+    }};
 }
 pub(crate) use run_async_js_block;
 
@@ -146,10 +145,10 @@ pub async fn pull_result_from_stdout(stdout: &mut Bytes<ChildStdout>, eof: &[u8]
 }
 
 macro_rules! repl {
-    ($context:expr, $($arg:tt)*) => {{
-        run_async_js_block!($context.stdin, &$context.eof, $($arg)*);
+    ($context:expr, $code:tt) => {{
+        run_async_js_block!($context.stdin, &$context.eof, $code);
         crate::common::js::pull_result_from_stdout(&mut $context.stdout, &$context.eof).await
-    }}
+    }};
 }
 pub(crate) use repl;
 
