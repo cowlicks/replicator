@@ -144,6 +144,7 @@ impl Peer {
         let protocol = self.protocol.clone();
         while let Some(Ok(event)) = {
             // this block is just here to release the `.write()` lock
+            #[allow(clippy::let_and_return)]
             let p = protocol.write().await._next().await;
             p
         } {
