@@ -63,7 +63,7 @@ pub fn _run_script_relative_to_git_root(script: &str) -> Result<Output> {
         .output()?)
 }
 
-pub fn run_code(
+pub fn _run_code(
     code_string: &str,
     script_file_name: &str,
     build_command: impl FnOnce(&str, &str) -> String,
