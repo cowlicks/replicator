@@ -1,4 +1,3 @@
-const readline = require('readline');
 const { AsyncQueue } = require('./utils.js');
 
 module.exports.repl = async function() {
