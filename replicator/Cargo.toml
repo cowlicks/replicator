@@ -19,7 +19,6 @@ async-channel = "1"
 async-trait = "0.1.81"
 
 [dev-dependencies]
-rusty_nodejs_repl = { path = "../../rsjs" }
 async-process = "2.2.1"
 async-std = "1.12.0"
 hex = "0.4.3"
@@ -31,3 +30,4 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 utils = { path = "../utils" }
 macros = { path = "../macros" }
 random-access-memory = "3.0.0"
+rusty_nodejs_repl = "0.1.0"
