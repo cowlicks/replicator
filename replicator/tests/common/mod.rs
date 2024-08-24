@@ -119,28 +119,6 @@ pub fn _parse_json_result(output: &Output) -> Result<Vec<Vec<u8>>> {
     Ok(res.into_iter().map(|x| x.into()).collect())
 }
 
-#[allow(unused_macros)]
-macro_rules! write_range_to_hb {
-    ($hb:expr) => {{
-        write_range_to_hb!($hb, 0..100)
-    }};
-    ($hb:expr, $range:expr) => {{
-        let hb = $hb;
-        let keys: Vec<Vec<u8>> = ($range)
-            .map(|x| x.clone().to_string().as_bytes().to_vec())
-            .collect();
-
-        for k in keys.iter() {
-            let val: Option<&[u8]> = Some(k);
-            hb.put(k, val).await?;
-        }
-        keys
-    }};
-}
-
-#[allow(unused_imports)]
-pub(crate) use write_range_to_hb;
-
 pub fn check_cmd_output(out: Output) -> Result<Output> {
     if out.status.code() != Some(0) {
         return Err(Box::new(Error::TestError(format!(
