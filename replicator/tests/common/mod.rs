@@ -139,6 +139,7 @@ pub fn serialize_public_key(key: &PartialKeypair) -> String {
 pub async fn run_replicate(
     listener: TcpListener,
     core: SharedCore,
+    is_initiator: bool,
 ) -> std::result::Result<(), ReplicatorError> {
     let mut incoming = listener.incoming();
     let Some(Ok(stream)) = incoming.next().await else {
@@ -146,5 +147,5 @@ pub async fn run_replicate(
     };
 
     let mut replicator = core.replicate().await?;
-    replicator.add_stream(stream, false).await
+    replicator.add_stream(stream, is_initiator).await
 }
