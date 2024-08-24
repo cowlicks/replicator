@@ -7,7 +7,7 @@ use std::{fmt::Debug, marker::Unpin};
 use async_channel::Receiver;
 use async_std::{
     sync::{Arc, Mutex, RwLock},
-    task::spawn,
+    task::{spawn, JoinHandle},
 };
 use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
 
@@ -314,18 +314,28 @@ pub async fn onpeer(core: SharedCore, mut channel: Channel) -> Result<(), Replic
 
     let _channel_rx_loop = spawn(async move {
         while let Some(message) = channel.next().await {
-            let result =
-                onmessage(core.clone(), peer_state.clone(), channel.clone(), message).await;
-            if let Err(e) = result {
-                trace!("protocol error: {}", e);
-                break;
-            }
+            onmessage(core.clone(), peer_state.clone(), channel.clone(), message);
         }
     });
     Ok(())
 }
 
-async fn onmessage(
+fn onmessage(
+    core: SharedCore,
+    peer_state: ShareRw<PeerState>,
+    channel: Channel,
+    message: Message,
+) -> JoinHandle<Result<(), ReplicatorError>> {
+    spawn(async move {
+        if let Err(e) = onmessage_inner(core, peer_state, channel, message).await {
+            error!("Error handling message: {e}");
+            return Err(e);
+        }
+        Ok(())
+    })
+}
+
+async fn onmessage_inner(
     core: SharedCore,
     peer_state: ShareRw<PeerState>,
     mut channel: Channel,
@@ -416,6 +426,7 @@ async fn onmessage(
                 channel.send(Message::Data(msg)).await?;
             }
         }
+
         Message::Data(message) => {
             trace!("Got Data message Data {{...}}");
             let (_old_info, _applied, new_info, request_block) = {
@@ -497,8 +508,9 @@ async fn onmessage(
             info!("\n\t{name} Channel TX:\n\t{messages:#?}");
             channel.send_batch(&messages).await.unwrap();
         }
+
         _ => {}
-    };
+    }
     Ok(())
 }
 
