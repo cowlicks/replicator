@@ -1,7 +1,10 @@
 mod common;
 
+use std::time::Duration;
+
 use async_std::net::TcpListener;
 use common::{js::path_to_node_modules, run_replicate, Result};
+use hypercore::{PartialKeypair, VerifyingKey};
 use macros::start_func_with;
 use utils::{make_reader_and_writer_keys, ram_core, SharedCore};
 
@@ -14,18 +17,19 @@ async fn rust_writer_js_reader<A: AsRef<[u8]>, B: AsRef<[A]>>(
 ) -> Result<(SharedCore, Repl)> {
     let (rkey, wkey) = make_reader_and_writer_keys();
     let core = ram_core(Some(&wkey)).await;
-    let server_core = core.clone();
 
     let listener = TcpListener::bind(format!("{}:0", LOOPBACK)).await?;
     let port = format!("{}", listener.local_addr()?.port());
     let hostname = LOOPBACK;
 
-    let _server =
-        async_std::task::spawn(async move { run_replicate(listener, server_core).await.unwrap() });
+    let server_core = core.clone();
+    let _server = async_std::task::spawn(async move {
+        run_replicate(listener, server_core, false).await.unwrap()
+    });
     core.lock().await.append_batch(batch).await?;
 
-    let mut repl = Config::build()?;
-    repl.imports.push(
+    let mut conf = Config::build()?;
+    conf.imports.push(
         "
 RAM = require('random-access-memory');
 Hypercore = require('hypercore');
@@ -34,7 +38,7 @@ net = require('net');
         .into(),
     );
 
-    repl.before.push(format!(
+    conf.before.push(format!(
         "
 key = '{}';
 core = new Hypercore(RAM, key);
@@ -42,29 +46,95 @@ await core.ready();
 ",
         serialize_public_key(&rkey)
     ));
-    repl.after.push("await core.close()".into());
+    conf.after.push("await core.close()".into());
 
-    repl.before.push(format!(
+    conf.before.push(format!(
         "
 socket = net.connect('{port}', '{hostname}');
 socket.pipe(core.replicate(true)).pipe(socket);
 await core.update({{wait: true}});
 "
     ));
-    repl.after.push("socket.destroy();".into());
-    repl.path_to_node_modules = Some(path_to_node_modules()?.display().to_string());
+    conf.after.push("socket.destroy();".into());
+    conf.path_to_node_modules = Some(path_to_node_modules()?.display().to_string());
 
-    Ok((core, repl.start()?))
+    Ok((core, conf.start()?))
+}
+
+//async fn setup_js_writer_rust_reader<A: AsRef<[u8]>, B: AsRef<[A]>>(
+//batch: B,
+async fn setup_js_writer_rust_reader() -> Result<(SharedCore, Repl)> {
+    // set up the JS core
+    let listener = TcpListener::bind(format!("{}:0", LOOPBACK)).await?;
+
+    let mut conf = Config::build()?;
+    conf.imports.push(
+        "
+RAM = require('random-access-memory');
+Hypercore = require('/home/blake/git/hyper/js/core');
+net = require('net');
+"
+        .into(),
+    );
+
+    conf.before.push(
+        "
+core = new Hypercore(RAM);
+"
+        .into(),
+    );
+    conf.after.push("await core.close()".into());
+
+    conf.before.push(format!(
+        "
+socket = net.connect('{}', '{LOOPBACK}');
+socket.pipe(core.replicate(false)).pipe(socket);
+",
+        listener.local_addr()?.port()
+    ));
+    conf.after.push("socket.destroy();".into());
+    conf.path_to_node_modules = Some(path_to_node_modules()?.display().to_string());
+
+    let mut repl = conf.start()?;
+
+    // get the public key from the JS core for the RS core
+    let key = repl
+        .repl("process.stdout.write(core.key.toString('hex'))")
+        .await?;
+
+    let key: [u8; 32] = data_encoding::HEXLOWER
+        .decode(&key)?
+        .as_slice()
+        .try_into()?;
+
+    let core = ram_core(Some(&PartialKeypair {
+        public: VerifyingKey::from_bytes(&key)?,
+        secret: None,
+    }))
+    .await;
+
+    let repl_core = core.clone();
+    let _server = async_std::task::spawn(async move {
+        run_replicate(listener, repl_core.clone(), true)
+            .await
+            .unwrap()
+    });
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let x = repl.repl("await core.ready();").await?;
+    println!("{}", String::from_utf8_lossy(&x));
+
+    Ok((core, repl))
 }
 
 #[start_func_with(require_js_data()?;)]
 #[tokio::test]
-async fn initial_data_rs_data_replicates_to_js() -> Result<()> {
+async fn initial_rust_data_replicates_to_js() -> Result<()> {
     let batch: &[&[u8]] = &[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"];
 
     let (_core, mut context) = rust_writer_js_reader(batch).await?;
     // print the length of the core so we can check it in rust
-    //flush_stdout!(context);
     let result = context
         .repl("process.stdout.write(String((await core.info()).length));")
         .await?;
@@ -88,7 +158,7 @@ async fn initial_data_rs_data_replicates_to_js() -> Result<()> {
 
 #[start_func_with(require_js_data()?;)]
 #[tokio::test]
-async fn added_data_replicates_to_js() -> Result<()> {
+async fn added_rust_data_replicates_to_js() -> Result<()> {
     let initial_datas = [b"a", b"b", b"c"];
     let (core, mut context) = rust_writer_js_reader(&initial_datas).await?;
 
@@ -127,5 +197,29 @@ process.stdout.write(String((await core.info()).length));",
     // stop the repl. When repl is stopped hypercore & socket are closed
     let _ = context.repl("queue.done();").await?;
     let _ = context.child.output().await?;
+    Ok(())
+}
+
+#[start_func_with(require_js_data()?;)]
+#[tokio::test]
+async fn js_writer_replicates_to_rust_reader() -> Result<()> {
+    utils::init_env_logs();
+    let (core, mut repl) = setup_js_writer_rust_reader().await?;
+
+    for i in 0..10 {
+        repl.repl(&format!("await core.append(Buffer.from([{i}]));"))
+            .await?;
+        loop {
+            // this does not work without thin check to info..
+            if core.lock().await.info().length == i + 1 {
+                if let Some(x) = core.lock().await.get(i).await? {
+                    assert_eq!(x, vec![i as u8]);
+                    break;
+                }
+            }
+            println!("{i}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
     Ok(())
 }
