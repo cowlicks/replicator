@@ -133,7 +133,7 @@ pub fn check_cmd_output(out: Output) -> Result<Output> {
 pub static LOOPBACK: &str = "127.0.0.1";
 
 pub fn serialize_public_key(key: &PartialKeypair) -> String {
-    hex::encode(key.public.as_bytes())
+    data_encoding::HEXLOWER.encode(key.public.as_bytes())
 }
 
 pub async fn run_replicate(
