@@ -29,13 +29,6 @@ type ShareRw<T> = Arc<RwLock<T>>;
 type SharedCore = Arc<Mutex<Hypercore>>;
 
 #[macro_export]
-macro_rules! lk {
-    ($core:tt) => {
-        $core.lock().await
-    };
-}
-
-#[macro_export]
 macro_rules! r {
     ($core:tt) => {
         $core.read().await
@@ -53,7 +46,7 @@ macro_rules! reader_or_writer {
 }
 
 async fn is_writer(c: SharedCore) -> bool {
-    lk!(c).key_pair().secret.is_some()
+    c.lock().await.key_pair().secret.is_some()
 }
 
 #[derive(Error, Debug)]
@@ -230,7 +223,7 @@ async fn initiate_sync(
     channel: &mut Channel,
 ) -> Result<(), ReplicatorError> {
     let name = reader_or_writer!(core);
-    let info = lk!(core).info();
+    let info = core.lock().await.info();
     if info.fork != peer_state.read().await.remote_fork {
         peer_state.write().await.can_upgrade = false;
     }
@@ -364,7 +357,7 @@ async fn onmessage_inner(
         Message::Synchronize(message) => {
             let peer_length_changed = message.length != r!(peer_state).remote_length;
             let first_sync = !r!(peer_state).remote_synced;
-            let info = lk!(core).info();
+            let info = core.lock().await.info();
             let same_fork = message.fork == info.fork;
 
             {
@@ -378,6 +371,7 @@ async fn onmessage_inner(
 
                 ps.length_acked = if same_fork { message.remote_length } else { 0 };
             }
+
             let mut messages = vec![];
 
             if first_sync {
@@ -423,10 +417,12 @@ async fn onmessage_inner(
         Message::Request(message) => {
             trace!("Got Request message {message:?}");
             let (info, proof) = {
-                let proof = lk!(core)
+                let proof = core
+                    .lock()
+                    .await
                     .create_proof(message.block, message.hash, message.seek, message.upgrade)
                     .await?;
-                (lk!(core).info(), proof)
+                (core.lock().await.info(), proof)
             };
 
             if let Some(proof) = proof {
@@ -445,17 +441,17 @@ async fn onmessage_inner(
         Message::Data(message) => {
             trace!("Got Data message Data {{...}}");
             let (_old_info, _applied, new_info, request_block) = {
-                let old_info = lk!(core).info();
+                let old_info = core.lock().await.info();
 
                 let proof = message.clone().into_proof();
-                let applied = lk!(core).verify_and_apply_proof(&proof).await?;
-                let new_info = lk!(core).info();
+                let applied = core.lock().await.verify_and_apply_proof(&proof).await?;
+                let new_info = core.lock().await.info();
 
                 let request_block: Option<RequestBlock> = if let Some(upgrade) = &message.upgrade {
                     // When getting the initial upgrade, send a request for the first missing block
                     if old_info.length < upgrade.length {
                         let request_index = old_info.length;
-                        let nodes = lk!(core).missing_nodes(request_index).await?;
+                        let nodes = core.lock().await.missing_nodes(request_index).await?;
                         Some(RequestBlock {
                             index: request_index,
                             nodes,
@@ -467,7 +463,7 @@ async fn onmessage_inner(
                     // When receiving a block, ask for the next, if there are still some missing
                     if block.index < r!(peer_state).remote_length - 1 {
                         let request_index = block.index + 1;
-                        let nodes = lk!(core).missing_nodes(request_index).await?;
+                        let nodes = core.lock().await.missing_nodes(request_index).await?;
                         Some(RequestBlock {
                             index: request_index,
                             nodes,

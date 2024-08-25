@@ -44,7 +44,12 @@ async fn create_connected_cores<A: AsRef<[u8]>, B: AsRef<[A]>>(
     ));
 
     // add data
-    lk!(writer_core).append_batch(initial_data).await.unwrap();
+    writer_core
+        .lock()
+        .await
+        .append_batch(initial_data)
+        .await
+        .unwrap();
 
     let reader_core = Arc::new(Mutex::new(
         HypercoreBuilder::new(Storage::new_memory().await.unwrap())
@@ -115,8 +120,8 @@ async fn one_block_before_get() -> Result<(), ReplicatorError> {
         create_connected_cores(batch).await?;
     for (i, expected_block) in batch.iter().enumerate() {
         loop {
-            if lk!(reader_core).info().length as usize > i {
-                if let Some(block) = lk!(reader_core).get(i as u64).await? {
+            if reader_core.lock().await.info().length as usize > i {
+                if let Some(block) = reader_core.lock().await.get(i as u64).await? {
                     if block == *expected_block {
                         break;
                     }
@@ -175,7 +180,7 @@ async fn append_many_foreach_reader_update_reader_get() -> Result<(), Replicator
         writer_core.lock().await.append(val).await?;
 
         // wait for reader's length to update
-        while (lk!(reader_core).info().length as usize) != i + 1 {
+        while (reader_core.lock().await.info().length as usize) != i + 1 {
             wait!();
         }
         assert_eq!(reader_core.lock().await.info().length as usize, i + 1);
