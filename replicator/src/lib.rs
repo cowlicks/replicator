@@ -12,7 +12,7 @@ use async_std::{
 use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
 
 use thiserror::Error;
-use tracing::{error, info, trace, warn};
+use tracing::{error, trace, warn};
 
 use hypercore::{Hypercore, HypercoreError, RequestBlock, RequestUpgrade};
 use hypercore_protocol::{
@@ -148,7 +148,7 @@ impl Peer {
             let p = protocol.write().await._next().await;
             p
         } {
-            info!("\n\t{name} Proto RX:\n\t{:#?}", event);
+            trace!("\n\t{name} Proto RX:\n\t{:#?}", event);
             match event {
                 Event::Handshake(_m) => {
                     if is_initiator {
@@ -253,12 +253,12 @@ async fn initiate_sync(
             start: 0,
             length: info.contiguous_length,
         };
-        info!("\n\t{name} Channel TX:[\n\t{sync_msg:#?},\n\t{range_msg:#?}\n])");
+        trace!("\n\t{name} Channel TX:[\n\t{sync_msg:#?},\n\t{range_msg:#?}\n])");
         channel
             .send_batch(&[Message::Synchronize(sync_msg), Message::Range(range_msg)])
             .await?;
     } else {
-        info!("\n\t{name} Channel TX:\n\t{sync_msg:#?})");
+        trace!("\n\t{name} Channel TX:\n\t{sync_msg:#?})");
         channel.send(Message::Synchronize(sync_msg)).await?;
     }
     Ok(())
@@ -397,7 +397,7 @@ async fn onmessage_inner(
 
                 messages.push(Message::Request(msg));
             }
-            info!("\n\t{name} Channel TX:\n\t{messages:#?}");
+            trace!("\n\t{name} Channel TX:\n\t{messages:#?}");
             if !messages.is_empty() {
                 channel.send_batch(&messages).await?;
             }
@@ -505,7 +505,7 @@ async fn onmessage_inner(
                     upgrade: None,
                 }));
             }
-            info!("\n\t{name} Channel TX:\n\t{messages:#?}");
+            trace!("\n\t{name} Channel TX:\n\t{messages:#?}");
             channel.send_batch(&messages).await.unwrap();
         }
 
