@@ -41,6 +41,13 @@ pub async fn setup_logs() {
         .await;
 }
 
+use tracing_subscriber::EnvFilter;
+pub fn init_env_logs() {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env()) // Reads `RUST_LOG` environment variable
+        .init();
+}
+
 /// Seedable deterministic pseudorandom number generator used for reproducible randomized testing
 pub struct Rand {
     seed: u64,
