@@ -28,13 +28,6 @@ impl<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static> StreamTraits for
 type ShareRw<T> = Arc<RwLock<T>>;
 type SharedCore = Arc<Mutex<Hypercore>>;
 
-#[macro_export]
-macro_rules! r {
-    ($core:tt) => {
-        $core.read().await
-    };
-}
-
 macro_rules! reader_or_writer {
     ($core:ident) => {
         if is_writer($core.clone()).await {
@@ -355,8 +348,8 @@ async fn onmessage_inner(
     trace!("{name} onmessage {}", message.kind());
     match message {
         Message::Synchronize(message) => {
-            let peer_length_changed = message.length != r!(peer_state).remote_length;
-            let first_sync = !r!(peer_state).remote_synced;
+            let peer_length_changed = message.length != peer_state.read().await.remote_length;
+            let first_sync = !peer_state.read().await.remote_synced;
             let info = core.lock().await.info();
             let same_fork = message.fork == info.fork;
 
@@ -379,8 +372,8 @@ async fn onmessage_inner(
                 let msg = Synchronize {
                     fork: info.fork,
                     length: info.length,
-                    remote_length: r!(peer_state).remote_length,
-                    can_upgrade: r!(peer_state).can_upgrade,
+                    remote_length: peer_state.read().await.remote_length,
+                    can_upgrade: peer_state.read().await.can_upgrade,
                     uploading: true,
                     downloading: true,
                 };
@@ -388,9 +381,9 @@ async fn onmessage_inner(
             }
 
             // if peer is longer than us
-            if r!(peer_state).remote_length > info.length
+            if peer_state.read().await.remote_length > info.length
                 // and peer knows our correct length
-                && r!(peer_state).length_acked == info.length
+                && peer_state.read().await.length_acked == info.length
                 // and peer's length has changed
                 && peer_length_changed
             {
@@ -402,7 +395,7 @@ async fn onmessage_inner(
                     seek: None,
                     upgrade: Some(RequestUpgrade {
                         start: info.length,
-                        length: r!(peer_state).remote_length - info.length,
+                        length: peer_state.read().await.remote_length - info.length,
                     }),
                 };
 
@@ -461,7 +454,7 @@ async fn onmessage_inner(
                     }
                 } else if let Some(block) = &message.block {
                     // When receiving a block, ask for the next, if there are still some missing
-                    if block.index < r!(peer_state).remote_length - 1 {
+                    if block.index < peer_state.read().await.remote_length - 1 {
                         let request_index = block.index + 1;
                         let nodes = core.lock().await.missing_nodes(request_index).await?;
                         Some(RequestBlock {
@@ -485,8 +478,8 @@ async fn onmessage_inner(
 
             // If we got an upgrade send a Sync
             if message.upgrade.is_some() {
-                let remote_length = if new_info.fork == r!(peer_state).remote_fork {
-                    r!(peer_state).remote_length
+                let remote_length = if new_info.fork == peer_state.read().await.remote_fork {
+                    peer_state.read().await.remote_length
                 } else {
                     0
                 };
