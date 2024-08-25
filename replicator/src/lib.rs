@@ -277,25 +277,40 @@ async fn core_event_loop(
     Ok(())
 }
 
-async fn on_get_event_loop(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
-    let mut on_get = core.lock().await.on_get_subscribe();
-    while let Ok((index, _tx)) = on_get.recv().await {
+async fn on_get_loop(core: SharedCore, channel: Channel) -> Result<(), ReplicatorError> {
+    let mut on_get_events = core.lock().await.on_get_subscribe();
+    while let Ok((index, _tx)) = on_get_events.recv().await {
         trace!("got core upgrade event. Notifying peers");
-        let block = RequestBlock {
-            index,
-            nodes: core.lock().await.missing_nodes(index).await?,
-        };
-        let msg = Message::Request(Request {
-            fork: core.lock().await.info().fork,
-            id: block.index + 1,
-            block: Some(block),
-            hash: None,
-            seek: None,
-            upgrade: None,
-        });
-
-        channel.send_batch(&[msg]).await?;
+        on_get(core.clone(), channel.clone(), index);
     }
+    Ok(())
+}
+fn on_get(
+    core: SharedCore,
+    channel: Channel,
+    index: u64,
+) -> JoinHandle<Result<(), ReplicatorError>> {
+    spawn(on_get_inner(core, channel, index))
+}
+async fn on_get_inner(
+    core: SharedCore,
+    mut channel: Channel,
+    index: u64,
+) -> Result<(), ReplicatorError> {
+    let block = RequestBlock {
+        index,
+        nodes: core.lock().await.missing_nodes(index).await?,
+    };
+    let msg = Message::Request(Request {
+        fork: core.lock().await.info().fork,
+        id: block.index + 1,
+        block: Some(block),
+        hash: None,
+        seek: None,
+        upgrade: None,
+    });
+
+    channel.send_batch(&[msg]).await?;
     Ok(())
 }
 
@@ -310,7 +325,7 @@ pub async fn onpeer(core: SharedCore, mut channel: Channel) -> Result<(), Replic
         channel.clone(),
     ));
 
-    let _on_get_loop = spawn(on_get_event_loop(core.clone(), channel.clone()));
+    let _on_get_loop = spawn(on_get_loop(core.clone(), channel.clone()));
 
     let _channel_rx_loop = spawn(async move {
         while let Some(message) = channel.next().await {
