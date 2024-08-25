@@ -17,8 +17,10 @@ use super::*;
 
 static PIPE_CAPACITY: usize = 1024 * 1024 * 4;
 
-async fn pause() {
-    sleep(Duration::from_millis(50)).await;
+macro_rules! wait {
+    () => {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
 }
 
 async fn get_messages(rep: &HcReplicator) -> Vec<Message> {
@@ -93,11 +95,11 @@ async fn initial_sync() -> Result<(), ReplicatorError> {
     let ((_wcore, wrep), (_rcore, rrep)) = create_connected_cores(vec![] as Vec<&[u8]>).await?;
 
     loop {
-        if get_messages(&wrep).await.len() >= 2 {
+        if get_messages(&wrep).await.len() >= 2 && get_messages(&rrep).await.len() >= 2 {
             break;
         }
+        wait!();
     }
-    pause().await;
     let sync_msg = Message::Synchronize(Synchronize {
         fork: 0,
         length: 0,
@@ -114,51 +116,27 @@ async fn initial_sync() -> Result<(), ReplicatorError> {
     Ok(())
 }
 
-// writer:    |   reader: | no get after
-//            |
-// rust:      |
-// * Sync     |  * Sync   |
-// * Range    |  * Sync   |
-// * Sync     |  * Req    |
-// * Data     |  * Sync   |
-// * Data     |  * Req    |
-//            |
-// js:        |
-// * Sync     |  * Sync   |
-// * Range    |  * Req    |
-// * Sync     |  * Sync   |
-// * Data     |  * Sync   |
-// * Sync     |  * Req    |
-// * Data     |  * Range  | (this data missing) | miss the ending range's
-//            |  * Range  |
 #[tokio::test]
 /// works but not the same as js
 async fn one_block_before_get() -> Result<(), ReplicatorError> {
     let batch: &[&[u8]] = &[b"0"];
     let ((_, writer_replicator), (reader_core, _reader_replicator)) =
         create_connected_cores(batch).await?;
-    for i in 0..batch.len() {
-        let mut j = 0;
+    for (i, expected_block) in batch.iter().enumerate() {
         loop {
             if lk!(reader_core).info().length as usize > i {
-                j += 1;
-                if j > 5 {
-                    break;
+                if let Some(block) = lk!(reader_core).get(i as u64).await? {
+                    if block == *expected_block {
+                        break;
+                    }
                 }
-                //if let Some(block) = lk!(reader_core).get(i as u64).await? {
-                //    if block == batch[i].to_vec() {
-                //        break;
-                //    }
-                //}
             }
-            sleep(Duration::from_millis(100)).await;
+            wait!();
         }
     }
-    println!("\nWriter\n");
     let peer = &writer_replicator.peers[0].read().await;
     let _ = peer.message_buff.read().await;
 
-    println!("\nReader\n");
     let peer = &_reader_replicator.peers[0].read().await;
     let _ = peer.message_buff.read().await;
     assert_eq!(reader_core.lock().await.get(0).await?, Some(b"0".to_vec()));
@@ -170,12 +148,11 @@ async fn one_block_after_might_lock() -> Result<(), ReplicatorError> {
     let ((writer_core, _), (reader_core, _)) = create_connected_cores(vec![] as Vec<&[u8]>).await?;
     writer_core.lock().await.append(b"0").await?;
     loop {
-        let block = reader_core.lock().await.get(0_u64).await?;
-        if block.is_some() {
-            assert_eq!(block.unwrap(), b"0");
+        if let Some(block) = reader_core.lock().await.get(0_u64).await? {
+            assert_eq!(block, b"0");
             break;
         }
-        pause().await;
+        wait!();
     }
     assert_eq!(reader_core.lock().await.get(0).await?, Some(b"0".to_vec()));
     Ok(())
@@ -183,19 +160,18 @@ async fn one_block_after_might_lock() -> Result<(), ReplicatorError> {
 
 #[tokio::test]
 async fn one_before_one_after_get() -> Result<(), ReplicatorError> {
-    let batch: &[&[u8]] = &[b"0"];
+    let batch: &[&[u8]] = &[&[0]];
     let ((writer_core, _), (reader_core, _)) = create_connected_cores(batch).await?;
-    writer_core.lock().await.append(b"1").await?;
-    loop {
-        let block = reader_core.lock().await.get(0_u64).await?;
-        if block.is_some() {
-            assert_eq!(block.unwrap(), b"0");
-            break;
+    writer_core.lock().await.append(&[1]).await?;
+    for i in 0..=1 {
+        loop {
+            if let Some(block) = reader_core.lock().await.get(i as u64).await? {
+                assert_eq!(block, vec![i as u8]);
+                break;
+            }
+            wait!();
         }
-        pause().await;
     }
-    assert_eq!(reader_core.lock().await.get(0).await?, Some(b"0".to_vec()));
-    assert_eq!(reader_core.lock().await.get(1).await?, Some(b"1".to_vec()));
     Ok(())
 }
 
@@ -209,7 +185,7 @@ async fn append_many_foreach_reader_update_reader_get() -> Result<(), Replicator
 
         // wait for reader's length to update
         while (lk!(reader_core).info().length as usize) != i + 1 {
-            pause().await;
+            wait!();
         }
         assert_eq!(reader_core.lock().await.info().length as usize, i + 1);
 
@@ -220,7 +196,7 @@ async fn append_many_foreach_reader_update_reader_get() -> Result<(), Replicator
                     break;
                 }
             }
-            pause().await;
+            wait!();
         }
     }
     Ok(())

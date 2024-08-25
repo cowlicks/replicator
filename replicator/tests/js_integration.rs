@@ -123,8 +123,6 @@ socket.pipe(core.replicate(false)).pipe(socket);
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let x = repl.repl("await core.ready();").await?;
-    println!("{}", String::from_utf8_lossy(&x));
-
     Ok((core, repl))
 }
 
@@ -203,7 +201,6 @@ process.stdout.write(String((await core.info()).length));",
 #[start_func_with(require_js_data()?;)]
 #[tokio::test]
 async fn js_writer_replicates_to_rust_reader() -> Result<()> {
-    utils::init_env_logs();
     let (core, mut repl) = setup_js_writer_rust_reader().await?;
 
     for i in 0..10 {
@@ -211,13 +208,10 @@ async fn js_writer_replicates_to_rust_reader() -> Result<()> {
             .await?;
         loop {
             // this does not work without thin check to info..
-            if core.lock().await.info().length == i + 1 {
-                if let Some(x) = core.lock().await.get(i).await? {
-                    assert_eq!(x, vec![i as u8]);
-                    break;
-                }
+            if let Some(x) = core.lock().await.get(i).await? {
+                assert_eq!(x, vec![i as u8]);
+                break;
             }
-            println!("{i}");
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
