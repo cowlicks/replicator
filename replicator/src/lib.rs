@@ -423,9 +423,7 @@ async fn onmessage_inner(
             let (info, proof) = {
                 let proof = lk!(core)
                     .create_proof(message.block, message.hash, message.seek, message.upgrade)
-                    .await
-                    .unwrap();
-                //TODO .await?;
+                    .await?;
                 (lk!(core).info(), proof)
             };
 
