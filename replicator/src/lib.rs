@@ -151,7 +151,7 @@ impl Peer {
                 }
                 Event::Channel(channel) => {
                     if this_dkey == *channel.discovery_key() {
-                        onpeer(core.clone(), channel).await?;
+                        on_peer(core.clone(), channel).await?;
                     } else {
                         error!("Wrong discovery key?");
                     }
@@ -302,7 +302,7 @@ async fn on_get_inner(
     Ok(())
 }
 
-pub async fn onpeer(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
+async fn on_peer(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
     let peer_state = Arc::new(RwLock::new(PeerState::default()));
 
     initiate_sync(core.clone(), peer_state.clone(), &mut channel).await?;
