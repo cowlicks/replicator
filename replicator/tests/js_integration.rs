@@ -117,9 +117,7 @@ socket.pipe(core.replicate(false)).pipe(socket);
             .unwrap()
     });
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    let x = repl.repl("await core.ready();").await?;
+    repl.repl("await core.ready();").await?;
     Ok((core, repl))
 }
 
@@ -209,7 +207,7 @@ async fn js_writer_replicates_to_rust_reader() -> Result<()> {
                 assert_eq!(x, vec![i as u8]);
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(25)).await;
         }
     }
     Ok(())
