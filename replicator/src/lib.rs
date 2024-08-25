@@ -30,16 +30,12 @@ type SharedCore = Arc<Mutex<Hypercore>>;
 
 macro_rules! reader_or_writer {
     ($core:ident) => {
-        if is_writer($core.clone()).await {
+        if $core.lock().await.key_pair().secret.is_some() {
             "Writer"
         } else {
             "Reader"
         }
     };
-}
-
-async fn is_writer(c: SharedCore) -> bool {
-    c.lock().await.key_pair().secret.is_some()
 }
 
 #[derive(Error, Debug)]
@@ -210,6 +206,7 @@ impl HcReplicator {
         Ok(())
     }
 }
+
 async fn initiate_sync(
     core: SharedCore,
     peer_state: ShareRw<PeerState>,
