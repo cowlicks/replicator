@@ -1,12 +1,3 @@
-// TODO in several tests we use a loop where we run: core.get(i)
-// Then `pause().await` for a time fater if we don't have the block.
-// This loop is where we wait for the core to get updated.
-// However,  if we pause for too short a time, then we never receive the block.
-// Why? I should understand and/or fix this.
-// In this loop, where there is the `.get(i)`, the reader requests the data
-// then writer responds with the data,
-// but the reader does not receive this message
-use async_std::task::sleep;
 use hypercore_protocol::{schema::Synchronize, Duplex, Message};
 use piper::pipe;
 use std::time::Duration;

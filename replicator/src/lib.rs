@@ -479,7 +479,6 @@ async fn onmessage_inner(
                     None
                 };
 
-                // If all have been replicated, print the result
                 if new_info.contiguous_length == new_info.length {
                     trace!("All data replicated. length = {}", new_info.length);
                 }
