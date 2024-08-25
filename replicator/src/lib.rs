@@ -1,4 +1,5 @@
 //! trait for replication
+#![warn(missing_debug_implementations)]
 #[cfg(test)]
 mod test;
 
@@ -177,6 +178,7 @@ impl Peer {
     }
 }
 
+#[derive(Debug)]
 pub struct HcReplicator {
     core: SharedCore,
     peers: Vec<ShareRw<Peer>>,
