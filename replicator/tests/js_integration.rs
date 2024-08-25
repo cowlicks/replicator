@@ -61,17 +61,14 @@ await core.update({{wait: true}});
     Ok((core, conf.start()?))
 }
 
-//async fn setup_js_writer_rust_reader<A: AsRef<[u8]>, B: AsRef<[A]>>(
-//batch: B,
 async fn setup_js_writer_rust_reader() -> Result<(SharedCore, Repl)> {
-    // set up the JS core
     let listener = TcpListener::bind(format!("{}:0", LOOPBACK)).await?;
 
     let mut conf = Config::build()?;
     conf.imports.push(
         "
 RAM = require('random-access-memory');
-Hypercore = require('/home/blake/git/hyper/js/core');
+Hypercore = require('hypercore');
 net = require('net');
 "
         .into(),
