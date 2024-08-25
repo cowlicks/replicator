@@ -481,13 +481,7 @@ async fn onmessage_inner(
 
                 // If all have been replicated, print the result
                 if new_info.contiguous_length == new_info.length {
-                    for i in 0..new_info.contiguous_length {
-                        trace!(
-                            "{}: {}",
-                            i,
-                            String::from_utf8(lk!(core).get(i).await?.unwrap()).unwrap()
-                        );
-                    }
+                    trace!("All data replicated. length = {}", new_info.length);
                 }
                 (old_info, applied, new_info, request_block)
             };
