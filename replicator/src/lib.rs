@@ -317,20 +317,20 @@ async fn on_peer(core: SharedCore, mut channel: Channel) -> Result<(), Replicato
 
     let _channel_rx_loop = spawn(async move {
         while let Some(message) = channel.next().await {
-            onmessage(core.clone(), peer_state.clone(), channel.clone(), message);
+            on_message(core.clone(), peer_state.clone(), channel.clone(), message);
         }
     });
     Ok(())
 }
 
-fn onmessage(
+fn on_message(
     core: SharedCore,
     peer_state: ShareRw<PeerState>,
     channel: Channel,
     message: Message,
 ) -> JoinHandle<Result<(), ReplicatorError>> {
     spawn(async move {
-        if let Err(e) = onmessage_inner(core, peer_state, channel, message).await {
+        if let Err(e) = on_message_inner(core, peer_state, channel, message).await {
             error!("Error handling message: {e}");
             return Err(e);
         }
@@ -338,7 +338,7 @@ fn onmessage(
     })
 }
 
-async fn onmessage_inner(
+async fn on_message_inner(
     core: SharedCore,
     peer_state: ShareRw<PeerState>,
     mut channel: Channel,
