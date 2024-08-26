@@ -1,5 +1,15 @@
-//! trait for replication
-#![warn(missing_debug_implementations)]
+//! Implement replication for Hypercores.
+//!
+//! The [`hypercore`] crate exposes a the [`CoreMethods`] trait, which contains methods for reading
+//! and writing to a [`Hypercore`]. We use this trait for things we want to treat like hypercores,
+//! but aren't, like a `Arc<Mutex<Hypercore>>`. We implement [`CoreMethods`] on [`Replicator`]
+//! to provide a thing that replicates and can still be treated like a [`Hypercore`].
+//!
+//! The [`Replicate`] trait defines a method that returns the [`Replicator`] struct that implements
+//! [`CoreMethods`].
+//!
+
+#![warn(missing_debug_implementations, rust_2024_compatibility)]
 #[cfg(test)]
 mod test;
 
@@ -15,7 +25,7 @@ use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
 use thiserror::Error;
 use tracing::{error, trace, warn};
 
-use hypercore::{Hypercore, HypercoreError, RequestBlock, RequestUpgrade};
+use hypercore::{CoreMethods, Hypercore, HypercoreError, RequestBlock, RequestUpgrade};
 use hypercore_protocol::{
     discovery_key,
     schema::{Data, Range, Request, Synchronize},
@@ -50,13 +60,13 @@ pub enum ReplicatorError {
 }
 
 pub trait Replicate {
-    fn replicate(&self) -> impl Future<Output = Result<HcReplicator, ReplicatorError>> + Send;
+    fn replicate(&self) -> impl Future<Output = Result<Replicator, ReplicatorError>> + Send;
 }
 
 impl Replicate for SharedCore {
-    fn replicate(&self) -> impl Future<Output = Result<HcReplicator, ReplicatorError>> + Send {
+    fn replicate(&self) -> impl Future<Output = Result<Replicator, ReplicatorError>> + Send {
         let core = self.clone();
-        async move { Ok(HcReplicator::new(core)) }
+        async move { Ok(Replicator::new(core)) }
     }
 }
 
@@ -81,8 +91,11 @@ impl<S: StreamTraits> ProtoMethods for Protocol<S> {
 }
 
 pub struct Peer {
+    /// reference to the parent core
     core: SharedCore,
+    /// stream of events to the peer
     protocol: ShareRw<Box<dyn ProtoMethods>>,
+    //  RMME used for debugging
     message_buff: ShareRw<Vec<Message>>,
 }
 
@@ -161,12 +174,12 @@ impl Peer {
 }
 
 #[derive(Debug)]
-pub struct HcReplicator {
+pub struct Replicator {
     core: SharedCore,
     peers: Vec<ShareRw<Peer>>,
 }
 
-impl HcReplicator {
+impl Replicator {
     pub fn new(core: SharedCore) -> Self {
         Self {
             core,
@@ -204,6 +217,34 @@ impl HcReplicator {
             Ok::<(), ReplicatorError>(())
         });
         Ok(())
+    }
+}
+
+impl CoreMethods for Replicator {
+    type Error = HypercoreError;
+
+    fn get(&self, index: u64) -> impl Future<Output = Result<Option<Vec<u8>>, Self::Error>> + Send {
+        async move {
+            let mut core = self.core.lock().await;
+            core.get(index).await
+        }
+    }
+
+    fn info(&self) -> impl Future<Output = hypercore::Info> + Send {
+        async move {
+            let core = self.core.lock().await;
+            core.info()
+        }
+    }
+
+    fn append(
+        &self,
+        data: &[u8],
+    ) -> impl Future<Output = Result<hypercore::AppendOutcome, HypercoreError>> + Send {
+        async move {
+            let mut core = self.core.lock().await;
+            core.append(data).await
+        }
     }
 }
 

@@ -14,7 +14,7 @@ macro_rules! wait {
     };
 }
 
-async fn get_messages(rep: &HcReplicator) -> Vec<Message> {
+async fn get_messages(rep: &Replicator) -> Vec<Message> {
     let peer = rep.peers[0].read().await;
     let out = peer.message_buff.read().await.iter().cloned().collect();
     out
@@ -33,7 +33,7 @@ fn make_reader_and_writer_keys() -> (PartialKeypair, PartialKeypair) {
 
 async fn create_connected_cores<A: AsRef<[u8]>, B: AsRef<[A]>>(
     initial_data: B,
-) -> Result<((SharedCore, HcReplicator), (SharedCore, HcReplicator)), ReplicatorError> {
+) -> Result<((SharedCore, Replicator), (SharedCore, Replicator)), ReplicatorError> {
     let (reader_key, writer_key) = make_reader_and_writer_keys();
     let writer_core = Arc::new(Mutex::new(
         HypercoreBuilder::new(Storage::new_memory().await.unwrap())
