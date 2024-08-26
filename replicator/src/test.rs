@@ -72,8 +72,8 @@ async fn create_connected_cores<A: AsRef<[u8]>, B: AsRef<[A]>>(
     let stream_to_reader = Duplex::new(read_from_writer, write_to_reader);
     let stream_to_writer = Duplex::new(read_from_reader, write_to_writer);
 
-    let mut server_replicator = writer_core.clone().replicate();
-    let mut client_replicator = reader_core.clone().replicate();
+    let server_replicator = writer_core.clone().replicate();
+    let client_replicator = reader_core.clone().replicate();
 
     assert_eq!(
         writer_core.key_pair().await.public,
@@ -123,7 +123,7 @@ async fn initial_sync() -> Result<(), ReplicatorError> {
 /// works but not the same as js
 async fn one_block_before_get() -> Result<(), ReplicatorError> {
     let batch: &[&[u8]] = &[b"0"];
-    let ((_, writer_replicator), (reader_core, _reader_replicator)) =
+    let ((_, _writer_replicator), (reader_core, _reader_replicator)) =
         create_connected_cores(batch).await?;
     for (i, expected_block) in batch.iter().enumerate() {
         loop {

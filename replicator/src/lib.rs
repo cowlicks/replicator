@@ -184,8 +184,8 @@ impl Peer {
     }
 }
 
-#[derive(Debug)]
-struct Peers(ShareRw<Vec<ShareRw<Peer>>>);
+#[derive(Debug, Clone)]
+pub struct Peers(ShareRw<Vec<ShareRw<Peer>>>);
 
 impl Peers {
     fn new() -> Self {
@@ -199,7 +199,7 @@ impl Peers {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Replicator {
     core: SharedCore,
     peers: Peers,
@@ -215,8 +215,7 @@ impl Replicator {
 
     #[allow(private_bounds)]
     async fn add_peer<S: StreamTraits>(
-        // TODO make not mut
-        &mut self,
+        &self,
         stream: S,
         is_initiator: bool,
     ) -> Result<ShareRw<Peer>, ReplicatorError> {
@@ -233,8 +232,7 @@ impl Replicator {
 
     #[allow(private_bounds)]
     pub async fn add_stream<S: StreamTraits>(
-        // TODO make not mut
-        &mut self,
+        &self,
         stream: S,
         is_initiator: bool,
     ) -> Result<(), ReplicatorError> {

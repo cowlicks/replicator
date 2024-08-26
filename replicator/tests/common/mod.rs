@@ -145,6 +145,6 @@ pub async fn run_replicate(
         panic!("No connections");
     };
 
-    let mut replicator = core.replicate();
+    let replicator = core.replicate();
     replicator.add_stream(stream, is_initiator).await
 }
