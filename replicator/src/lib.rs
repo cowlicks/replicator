@@ -185,21 +185,37 @@ impl Peer {
 }
 
 #[derive(Debug)]
+struct Peers(ShareRw<Vec<ShareRw<Peer>>>);
+
+impl Peers {
+    fn new() -> Self {
+        Self(Arc::new(RwLock::new(vec![])))
+    }
+    pub async fn push(&self, peer: ShareRw<Peer>) {
+        self.0.write().await.push(peer);
+    }
+    pub async fn get(&self, i: usize) -> ShareRw<Peer> {
+        self.0.read().await[i].clone()
+    }
+}
+
+#[derive(Debug)]
 pub struct Replicator {
     core: SharedCore,
-    peers: Vec<ShareRw<Peer>>,
+    peers: Peers,
 }
 
 impl Replicator {
     pub fn new(core: SharedCore) -> Self {
         Self {
             core,
-            peers: vec![],
+            peers: Peers::new(),
         }
     }
 
     #[allow(private_bounds)]
-    pub async fn add_peer<S: StreamTraits>(
+    async fn add_peer<S: StreamTraits>(
+        // TODO make not mut
         &mut self,
         stream: S,
         is_initiator: bool,
@@ -211,12 +227,13 @@ impl Replicator {
             core,
             Arc::new(RwLock::new(Box::new(protocol))),
         )));
-        self.peers.push(peer.clone());
+        self.peers.push(peer.clone()).await;
         Ok(peer)
     }
 
     #[allow(private_bounds)]
     pub async fn add_stream<S: StreamTraits>(
+        // TODO make not mut
         &mut self,
         stream: S,
         is_initiator: bool,

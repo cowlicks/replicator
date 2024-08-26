@@ -14,9 +14,17 @@ macro_rules! wait {
     };
 }
 
-async fn get_messages(rep: &Replicator) -> Vec<Message> {
-    let peer = rep.peers[0].read().await;
-    let out = peer.message_buff.read().await.iter().cloned().collect();
+async fn get_messages(repl: &Replicator) -> Vec<Message> {
+    let peer = repl.peers.get(0).await;
+    let out = peer
+        .read()
+        .await
+        .message_buff
+        .read()
+        .await
+        .iter()
+        .cloned()
+        .collect();
     out
 }
 
@@ -129,11 +137,6 @@ async fn one_block_before_get() -> Result<(), ReplicatorError> {
             wait!();
         }
     }
-    let peer = &writer_replicator.peers[0].read().await;
-    let _ = peer.message_buff.read().await;
-
-    let peer = &_reader_replicator.peers[0].read().await;
-    let _ = peer.message_buff.read().await;
     assert_eq!(reader_core.get(0).await?, Some(b"0".to_vec()));
     Ok(())
 }
