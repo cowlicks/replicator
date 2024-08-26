@@ -17,12 +17,14 @@ async-channel = "1"
 async-trait = "0.1.81"
 
 [dependencies.hypercore]
-git = "https://github.com/cowlicks/hypercore.git"
-branch = "add-events"
+path = "../../core"
+#git = "https://github.com/cowlicks/hypercore.git"
+#branch = "add-events"
 
 [dependencies.hypercore-protocol]
-git  = "https://github.com/cowlicks/hypercore-protocol-rs.git"
-branch = "add-events"
+path = "../../protocol"
+#git  = "https://github.com/cowlicks/hypercore-protocol-rs.git"
+#branch = "add-events"
 
 [dev-dependencies]
 async-process = "2.2.1"
