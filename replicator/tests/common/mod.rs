@@ -8,10 +8,9 @@ use std::{
 use async_process::Stdio;
 use async_std::net::TcpListener;
 use futures_lite::StreamExt;
-use hypercore::PartialKeypair;
+use hypercore::{PartialKeypair, SharedCore};
 use replicator::{Replicate, ReplicatorError};
 use tempfile::TempDir;
-use utils::SharedCore;
 
 pub mod js;
 
@@ -146,6 +145,6 @@ pub async fn run_replicate(
         panic!("No connections");
     };
 
-    let mut replicator = core.replicate().await?;
+    let mut replicator = core.replicate();
     replicator.add_stream(stream, is_initiator).await
 }

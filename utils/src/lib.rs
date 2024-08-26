@@ -1,9 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use async_std::sync::{Arc, Mutex};
-use hypercore::{generate_signing_key, Hypercore, HypercoreBuilder, PartialKeypair, Storage};
-
-pub type SharedCore = Arc<Mutex<Hypercore>>;
+use hypercore::{generate_signing_key, HypercoreBuilder, PartialKeypair, SharedCore, Storage};
 
 pub fn make_reader_and_writer_keys() -> (PartialKeypair, PartialKeypair) {
     let signing_key = generate_signing_key();
@@ -22,7 +19,7 @@ pub async fn ram_core(key: Option<&PartialKeypair>) -> SharedCore {
         Some(key) => builder.key_pair(key.clone()),
         None => builder,
     };
-    Arc::new(Mutex::new(builder.build().await.unwrap()))
+    builder.build().await.unwrap().into()
 }
 
 static INIT_LOG: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();

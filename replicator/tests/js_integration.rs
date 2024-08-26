@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use async_std::net::TcpListener;
 use common::{js::path_to_node_modules, run_replicate, Result};
-use hypercore::{PartialKeypair, VerifyingKey};
+use hypercore::{CoreMethods, PartialKeypair, SharedCore, VerifyingKey};
 use macros::start_func_with;
-use utils::{make_reader_and_writer_keys, ram_core, SharedCore};
+use utils::{make_reader_and_writer_keys, ram_core};
 
 use rusty_nodejs_repl::{Config, Repl};
 
@@ -26,7 +26,7 @@ async fn rust_writer_js_reader<A: AsRef<[u8]>, B: AsRef<[A]>>(
     let _server = async_std::task::spawn(async move {
         run_replicate(listener, server_core, false).await.unwrap()
     });
-    core.lock().await.append_batch(batch).await?;
+    core.0.lock().await.append_batch(batch).await?;
 
     let mut conf = Config::build()?;
     conf.imports.push(
@@ -169,7 +169,7 @@ await new Promise(r => setTimeout(r, 1e2))
     assert_eq!(stdout, b"3");
 
     for (i, l) in "defghijklmnopqrstuvwxyz".bytes().enumerate() {
-        core.lock().await.append(&[l]).await?;
+        core.append(&[l]).await?;
         let new_size = initial_datas.len() + i;
         let stdout = context
             .repl(
@@ -203,7 +203,7 @@ async fn js_writer_replicates_to_rust_reader() -> Result<()> {
             .await?;
         loop {
             // this does not work without thin check to info..
-            if let Some(x) = core.lock().await.get(i).await? {
+            if let Some(x) = core.get(i).await? {
                 assert_eq!(x, vec![i as u8]);
                 break;
             }

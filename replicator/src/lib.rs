@@ -66,7 +66,6 @@ pub enum ReplicatorError {
 /// like how JS has [`Iterables` and
 /// `Iterators`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Iterators_and_generators#iterables).
 ///
-/// ```
 /// trait Replicator: CoreMethods { .. }
 ///
 /// trait Replicatable {
