@@ -73,13 +73,12 @@ pub enum ReplicatorError {
 ///     fn replicate() -> Replicator
 /// }
 pub trait Replicate {
-    fn replicate(&self) -> impl Future<Output = Result<Replicator, ReplicatorError>> + Send;
+    fn replicate(&self) -> Replicator;
 }
 
 impl Replicate for SharedCore {
-    fn replicate(&self) -> impl Future<Output = Result<Replicator, ReplicatorError>> + Send {
-        let core = self.clone();
-        async move { Ok(Replicator::new(core)) }
+    fn replicate(&self) -> Replicator {
+        Replicator::new(self.clone())
     }
 }
 
