@@ -17,7 +17,7 @@ use std::{fmt::Debug, marker::Unpin};
 
 use async_channel::Receiver;
 use async_std::{
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
     task::{spawn, JoinHandle},
 };
 use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
@@ -308,7 +308,7 @@ async fn core_event_loop(
 }
 
 async fn on_get_loop(core: SharedCore, channel: Channel) -> Result<(), ReplicatorError> {
-    let mut on_get_events = core.0.lock().await.on_get_subscribe();
+    let mut on_get_events = core.on_get_subscribe().await;
     while let Ok((index, _tx)) = on_get_events.recv().await {
         trace!("got core upgrade event. Notifying peers");
         on_get(core.clone(), channel.clone(), index);
