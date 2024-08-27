@@ -2,10 +2,10 @@ mod common;
 
 use std::time::Duration;
 
-use async_std::net::TcpListener;
 use common::{js::path_to_node_modules, run_replicate, Result};
 use hypercore::{CoreMethods, PartialKeypair, SharedCore, VerifyingKey};
 use macros::start_func_with;
+use tokio::{net::TcpListener, spawn};
 use utils::{make_reader_and_writer_keys, ram_core};
 
 use rusty_nodejs_repl::{Config, Repl};
@@ -23,9 +23,7 @@ async fn rust_writer_js_reader<A: AsRef<[u8]>, B: AsRef<[A]>>(
     let hostname = LOOPBACK;
 
     let server_core = core.clone();
-    let _server = async_std::task::spawn(async move {
-        run_replicate(listener, server_core, false).await.unwrap()
-    });
+    let _server = spawn(async move { run_replicate(listener, server_core, false).await.unwrap() });
     core.0.lock().await.append_batch(batch).await?;
 
     let mut conf = Config::build()?;
@@ -111,7 +109,7 @@ socket.pipe(core.replicate(false)).pipe(socket);
     .await;
 
     let repl_core = core.clone();
-    let _server = async_std::task::spawn(async move {
+    let _server = spawn(async move {
         run_replicate(listener, repl_core.clone(), true)
             .await
             .unwrap()

@@ -1,4 +1,3 @@
-// cargo thinks everything in here is unused even though it is used in the integration tests
 use std::{
     fs::File,
     io::Write,
@@ -6,11 +5,11 @@ use std::{
 };
 
 use async_process::Stdio;
-use async_std::net::TcpListener;
-use futures_lite::StreamExt;
 use hypercore::{PartialKeypair, SharedCore};
 use replicator::{Replicate, ReplicatorError};
 use tempfile::TempDir;
+use tokio::net::TcpListener;
+use tokio_util::compat::TokioAsyncReadCompatExt;
 
 pub mod js;
 
@@ -140,11 +139,7 @@ pub async fn run_replicate(
     core: SharedCore,
     is_initiator: bool,
 ) -> std::result::Result<(), ReplicatorError> {
-    let mut incoming = listener.incoming();
-    let Some(Ok(stream)) = incoming.next().await else {
-        panic!("No connections");
-    };
-
+    let (socket, _addr) = listener.accept().await?;
     let replicator = core.replicate();
-    replicator.add_stream(stream, is_initiator).await
+    replicator.add_stream(socket.compat(), is_initiator).await
 }

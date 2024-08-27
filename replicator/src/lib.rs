@@ -13,17 +13,15 @@
 #[cfg(test)]
 mod test;
 
-use std::{fmt::Debug, marker::Unpin};
+use std::{fmt::Debug, marker::Unpin, sync::Arc};
 
 use async_channel::Receiver;
-use async_std::{
-    sync::{Arc, RwLock},
-    task::{spawn, JoinHandle},
-};
 use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
 
 use thiserror::Error;
 use tracing::{error, trace, warn};
+
+use tokio::{spawn, sync::RwLock, task::JoinHandle};
 
 use hypercore::{
     CoreMethods, HypercoreError, ReplicationMethods, RequestBlock, RequestUpgrade, SharedCore,
