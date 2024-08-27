@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-utils = []
+utils = ["dep:piper"]
 
 [dependencies]
 futures-lite = "2.3.0"
@@ -14,6 +14,7 @@ thiserror = "1.0.50"
 tokio = { version = "1.37.0", features = ["sync", "time"] }
 async-channel = "1"
 async-trait = "0.1.81"
+piper = { version = "0.2.1", optional = true }
 
 [dependencies.hypercore]
 path = "../../core"

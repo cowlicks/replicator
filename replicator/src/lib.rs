@@ -13,6 +13,9 @@
 #[cfg(test)]
 mod test;
 
+#[cfg(any(test, feature = "utils"))]
+pub mod utils;
+
 use std::{fmt::Debug, marker::Unpin, sync::Arc};
 
 use async_channel::Receiver;
