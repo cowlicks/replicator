@@ -35,6 +35,6 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 utils = { path = "../utils" }
 macros = { path = "../macros" }
 random-access-memory = "3.0.0"
-rusty_nodejs_repl = "0.1.0"
+rusty_nodejs_repl = "0.2.1"
 data-encoding = "2.6.0"
 tokio-util = { version = "0.7.11", features = ["compat"] }

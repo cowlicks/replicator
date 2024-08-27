@@ -94,7 +94,7 @@ socket.pipe(core.replicate(false)).pipe(socket);
 
     // get the public key from the JS core for the RS core
     let key = repl
-        .repl("process.stdout.write(core.key.toString('hex'))")
+        .run("process.stdout.write(core.key.toString('hex'))")
         .await?;
 
     let key: [u8; 32] = data_encoding::HEXLOWER
@@ -115,7 +115,7 @@ socket.pipe(core.replicate(false)).pipe(socket);
             .unwrap()
     });
 
-    repl.repl("await core.ready();").await?;
+    repl.run("await core.ready();").await?;
     Ok((core, repl))
 }
 
@@ -124,10 +124,10 @@ socket.pipe(core.replicate(false)).pipe(socket);
 async fn initial_rust_data_replicates_to_js() -> Result<()> {
     let batch: &[&[u8]] = &[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"];
 
-    let (_core, mut context) = rust_writer_js_reader(batch).await?;
+    let (_core, mut repl) = rust_writer_js_reader(batch).await?;
     // print the length of the core so we can check it in rust
-    let result = context
-        .repl("process.stdout.write(String((await core.info()).length));")
+    let result = repl
+        .run("process.stdout.write(String((await core.info()).length));")
         .await?;
 
     let expected: Vec<u8> = format!("{}", batch.len()).bytes().collect();
@@ -135,15 +135,15 @@ async fn initial_rust_data_replicates_to_js() -> Result<()> {
 
     for (i, val) in batch.iter().enumerate() {
         let code = format!("process.stdout.write(String((await core.get({i}))));");
-        let stdout = context.repl(&code).await?;
+        let stdout = repl.run(&code).await?;
         assert_eq!(stdout, *val);
     }
 
     // stop the repl. When repl is stopped hypercore & socket are closed
-    let _ = context.repl("queue.done();").await?;
+    let _ = repl.stop().await?;
 
     // ensure js process closes properly
-    assert_eq!(context.child.output().await?.status.code(), Some(0));
+    assert_eq!(repl.child.output().await?.status.code(), Some(0));
     Ok(())
 }
 
@@ -151,26 +151,26 @@ async fn initial_rust_data_replicates_to_js() -> Result<()> {
 #[tokio::test]
 async fn added_rust_data_replicates_to_js() -> Result<()> {
     let initial_datas = [b"a", b"b", b"c"];
-    let (core, mut context) = rust_writer_js_reader(&initial_datas).await?;
+    let (core, mut repl) = rust_writer_js_reader(&initial_datas).await?;
 
-    let _res = context
-        .repl(
+    let _res = repl
+        .run(
             "
 await core.update({wait: true});
 await new Promise(r => setTimeout(r, 1e2))
 ",
         )
         .await?;
-    let stdout = context
-        .repl("process.stdout.write(String((await core.info()).length));")
+    let stdout = repl
+        .run("process.stdout.write(String((await core.info()).length));")
         .await?;
     assert_eq!(stdout, b"3");
 
     for (i, l) in "defghijklmnopqrstuvwxyz".bytes().enumerate() {
         core.append(&[l]).await?;
         let new_size = initial_datas.len() + i;
-        let stdout = context
-            .repl(
+        let stdout = repl
+            .run(
                 "
 await core.update({wait: true});
 await new Promise(r => setTimeout(r, 1e2))
@@ -181,13 +181,13 @@ process.stdout.write(String((await core.info()).length));",
         assert_eq!(stdout, len);
 
         let code = format!("process.stdout.write(String((await core.get({new_size}))));");
-        let stdout = context.repl(&code).await?;
+        let stdout = repl.run(&code).await?;
         assert_eq!(stdout, &[l]);
     }
 
     // stop the repl. When repl is stopped hypercore & socket are closed
-    let _ = context.repl("queue.done();").await?;
-    let _ = context.child.output().await?;
+    let _ = repl.stop().await?;
+    let _ = repl.child.output().await?;
     Ok(())
 }
 
@@ -197,7 +197,7 @@ async fn js_writer_replicates_to_rust_reader() -> Result<()> {
     let (core, mut repl) = setup_js_writer_rust_reader().await?;
 
     for i in 0..10 {
-        repl.repl(&format!("await core.append(Buffer.from([{i}]));"))
+        repl.run(&format!("await core.append(Buffer.from([{i}]));"))
             .await?;
         loop {
             // this does not work without thin check to info..
