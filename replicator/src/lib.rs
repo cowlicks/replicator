@@ -79,12 +79,12 @@ pub enum ReplicatorError {
 ///     fn replicate() -> Replicator
 /// }
 pub trait Replicate {
-    fn replicate(&self) -> Replicator;
+    fn replicate(&self) -> ReplicatingCore;
 }
 
 impl Replicate for SharedCore {
-    fn replicate(&self) -> Replicator {
-        Replicator::new(self.clone())
+    fn replicate(&self) -> ReplicatingCore {
+        ReplicatingCore::new(self.clone())
     }
 }
 
@@ -183,12 +183,25 @@ impl Peers {
 }
 
 #[derive(Debug, Clone)]
-pub struct Replicator {
+pub struct ReplicatingCore {
     core: SharedCore,
     peers: Peers,
 }
 
-impl Replicator {
+impl From<Hypercore> for ReplicatingCore {
+    fn from(core: Hypercore) -> Self {
+        let sc: SharedCore = core.into();
+        ReplicatingCore::new(sc)
+    }
+}
+
+impl From<SharedCore> for ReplicatingCore {
+    fn from(core: SharedCore) -> Self {
+        ReplicatingCore::new(core)
+    }
+}
+
+impl ReplicatingCore {
     pub fn new(core: SharedCore) -> Self {
         Self {
             core,

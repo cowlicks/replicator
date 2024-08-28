@@ -26,25 +26,30 @@ pub fn create_connected_streams() -> (S, S) {
     (stream_to_a, stream_to_b)
 }
 
+pub async fn make_slave(master: &SharedCore) -> Result<SharedCore, ReplicatorError> {
+    let key = public_key(master).await;
+
+    let core: SharedCore = HypercoreBuilder::new(Storage::new_memory().await.unwrap())
+        .key_pair(key)
+        .build()
+        .await?
+        .into();
+    Ok(core)
+}
+
 pub async fn writer_and_reader_cores() -> Result<(SharedCore, SharedCore), ReplicatorError> {
-    let (reader_key, writer_key) = make_reader_and_writer_keys();
     let writer_core: SharedCore = HypercoreBuilder::new(Storage::new_memory().await?)
-        .key_pair(writer_key)
         .build()
         .await?
         .into();
 
-    let reader_core: SharedCore = HypercoreBuilder::new(Storage::new_memory().await.unwrap())
-        .key_pair(reader_key)
-        .build()
-        .await?
-        .into();
+    let reader_core = make_slave(&writer_core).await?;
     Ok((writer_core, reader_core))
 }
 
 pub async fn create_connected_cores<A: AsRef<[u8]>, B: AsRef<[A]>>(
     initial_data: B,
-) -> ((SharedCore, Replicator), (SharedCore, Replicator)) {
+) -> ((SharedCore, ReplicatingCore), (SharedCore, ReplicatingCore)) {
     let (writer_core, reader_core) = writer_and_reader_cores().await.unwrap();
 
     writer_core
