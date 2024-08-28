@@ -35,9 +35,6 @@ use hypercore_protocol::{
     Channel, Event, Key, Message, Protocol, ProtocolBuilder,
 };
 
-trait StreamTraits: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static {}
-impl<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static> StreamTraits for S {}
-
 type ShareRw<T> = Arc<RwLock<T>>;
 
 macro_rules! reader_or_writer {
@@ -90,7 +87,7 @@ trait ProtoMethods: Debug + Send + Sync {
 }
 
 #[async_trait::async_trait]
-impl<S: StreamTraits> ProtoMethods for Protocol<S> {
+impl<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static> ProtoMethods for Protocol<S> {
     async fn open(&mut self, key: Key) -> std::io::Result<()> {
         Protocol::open(self, key).await
     }
@@ -214,8 +211,7 @@ impl Replicator {
         }
     }
 
-    #[allow(private_bounds)]
-    async fn add_peer<S: StreamTraits>(
+    async fn add_peer<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static>(
         &self,
         stream: S,
         is_initiator: bool,
@@ -231,8 +227,7 @@ impl Replicator {
         Ok(peer)
     }
 
-    #[allow(private_bounds)]
-    pub async fn add_stream<S: StreamTraits>(
+    pub async fn add_stream<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static>(
         &self,
         stream: S,
         is_initiator: bool,
