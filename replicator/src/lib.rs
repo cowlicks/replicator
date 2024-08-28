@@ -18,7 +18,6 @@ pub mod utils;
 
 use std::{fmt::Debug, marker::Unpin, sync::Arc};
 
-use async_channel::Receiver;
 use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
 
 use thiserror::Error;

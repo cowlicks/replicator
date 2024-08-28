@@ -9,37 +9,6 @@ macro_rules! wait {
 }
 
 #[tokio::test]
-/// This is **not** the same as js. Both the reader and writer send an extra Sync message.
-/// Seemingly as a reply to the first received one. But it works.
-async fn initial_sync() -> Result<(), Box<dyn std::error::Error>> {
-    /*
-    let ((_wcore, wrep), (_rcore, rrep)) = create_connected_cores(vec![] as Vec<&[u8]>).await;
-
-    loop {
-        if get_messages(&wrep).await.len() >= 2 && get_messages(&rrep).await.len() >= 2 {
-            break;
-        }
-        wait!();
-    }
-    let sync_msg = Message::Synchronize(Synchronize {
-        fork: 0,
-        length: 0,
-        remote_length: 0,
-        downloading: true,
-        uploading: true,
-        can_upgrade: true,
-    });
-    let expected = vec![sync_msg.clone(), sync_msg.clone()];
-    let msgs = get_messages(&wrep).await;
-    assert_eq!(msgs, expected);
-    let msgs = get_messages(&rrep).await;
-    assert_eq!(msgs, expected);
-    Ok(())
-    */
-    Ok(())
-}
-
-#[tokio::test]
 /// works but not the same as js
 async fn one_block_before_get() -> Result<(), ReplicatorError> {
     let batch: &[&[u8]] = &[b"0"];
