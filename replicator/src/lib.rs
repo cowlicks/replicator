@@ -26,7 +26,11 @@ use tracing::{error, trace, warn};
 use tokio::{spawn, sync::RwLock, task::JoinHandle};
 
 use hypercore::{
-    CoreMethods, HypercoreError, ReplicationMethods, RequestBlock, RequestUpgrade, SharedCore,
+    replication::{
+        CoreInfo, CoreMethods, CoreMethodsError, ReplicationMethods, ReplicationMethodsError,
+        SharedCore,
+    },
+    Hypercore, HypercoreError, RequestBlock, RequestUpgrade,
 };
 use hypercore_protocol::{
     discovery_key,
@@ -55,6 +59,12 @@ pub enum ReplicatorError {
     #[error("TODO")]
     // TODO add error and show it
     HypercoreError(#[from] HypercoreError),
+    #[error("TODO")]
+    // TODO add error and show it
+    ReplMethodsError(#[from] ReplicationMethodsError),
+    #[error("TODO")]
+    // TODO add error and show it
+    CoreMethodsError(#[from] CoreMethodsError),
 }
 
 /// Enables hypercore replication
@@ -216,27 +226,32 @@ impl Replicator {
     }
 }
 
-impl CoreMethods for Replicator {
-    type Error = HypercoreError;
-
-    fn get(&self, index: u64) -> impl Future<Output = Result<Option<Vec<u8>>, Self::Error>> + Send {
-        self.core.get(index)
-    }
-
+impl CoreInfo for ReplicatingCore {
     fn info(&self) -> impl Future<Output = hypercore::Info> + Send {
         self.core.info()
+    }
+    fn key_pair(&self) -> impl Future<Output = hypercore::PartialKeypair> + Send {
+        self.core.key_pair()
+    }
+}
+impl CoreMethods for ReplicatingCore {
+    fn get(
+        &self,
+        index: u64,
+    ) -> impl Future<Output = Result<Option<Vec<u8>>, CoreMethodsError>> + Send {
+        self.core.get(index)
     }
 
     fn append(
         &self,
         data: &[u8],
-    ) -> impl Future<Output = Result<hypercore::AppendOutcome, HypercoreError>> + Send {
+    ) -> impl Future<Output = Result<hypercore::AppendOutcome, CoreMethodsError>> + Send {
         self.core.append(data)
     }
 }
 
 async fn initiate_sync(
-    core: SharedCore,
+    core: impl ReplicationMethods + Clone + 'static,
     peer_state: ShareRw<PeerState>,
     channel: &mut Channel,
 ) -> Result<(), ReplicatorError> {
@@ -278,7 +293,7 @@ async fn initiate_sync(
 }
 
 async fn core_event_loop(
-    core: SharedCore,
+    core: impl ReplicationMethods + Clone + 'static,
     peer_state: ShareRw<PeerState>,
     mut channel: Channel,
 ) -> Result<(), ReplicatorError> {
@@ -290,7 +305,10 @@ async fn core_event_loop(
     Ok(())
 }
 
-async fn on_get_loop(core: SharedCore, channel: Channel) -> Result<(), ReplicatorError> {
+async fn on_get_loop(
+    core: impl ReplicationMethods + Clone + 'static,
+    channel: Channel,
+) -> Result<(), ReplicatorError> {
     let mut on_get_events = core.on_get_subscribe().await;
     while let Ok((index, _tx)) = on_get_events.recv().await {
         trace!("got core upgrade event. Notifying peers");
@@ -299,14 +317,15 @@ async fn on_get_loop(core: SharedCore, channel: Channel) -> Result<(), Replicato
     Ok(())
 }
 fn on_get(
-    core: SharedCore,
+    core: impl ReplicationMethods + 'static,
     channel: Channel,
     index: u64,
 ) -> JoinHandle<Result<(), ReplicatorError>> {
     spawn(on_get_inner(core, channel, index))
 }
+
 async fn on_get_inner(
-    core: SharedCore,
+    core: impl ReplicationMethods,
     mut channel: Channel,
     index: u64,
 ) -> Result<(), ReplicatorError> {
@@ -364,7 +383,7 @@ fn on_message(
 }
 
 async fn on_message_inner(
-    core: SharedCore,
+    core: impl ReplicationMethods,
     peer_state: ShareRw<PeerState>,
     mut channel: Channel,
     message: Message,
