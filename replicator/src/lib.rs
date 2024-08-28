@@ -308,7 +308,7 @@ async fn core_event_loop(
     peer_state: ShareRw<PeerState>,
     mut channel: Channel,
 ) -> Result<(), ReplicatorError> {
-    let mut on_append = core.0.lock().await.on_append_subscribe();
+    let mut on_append = core.on_append_subscribe().await;
     while let Ok(_event) = on_append.recv().await {
         trace!("got core upgrade event. Notifying peers");
         initiate_sync(core.clone(), peer_state.clone(), &mut channel).await?
