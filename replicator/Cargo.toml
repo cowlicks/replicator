@@ -15,6 +15,7 @@ tokio = { version = "1.37.0", features = ["sync", "time"] }
 async-channel = "1"
 async-trait = "0.1.81"
 piper = { version = "0.2.1", optional = true }
+derive_builder = "0.20.0"
 
 [dependencies.hypercore]
 path = "../../core"
