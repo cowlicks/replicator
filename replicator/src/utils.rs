@@ -9,6 +9,15 @@ use piper::{pipe, Reader, Writer};
 
 static PIPE_CAPACITY: usize = 1024 * 1024 * 4;
 
+pub async fn public_key(core: &SharedCore) -> PartialKeypair {
+    let PartialKeypair { public, .. } = core.key_pair().await;
+    let key = PartialKeypair {
+        public,
+        secret: None,
+    };
+    key
+}
+
 pub fn make_reader_and_writer_keys() -> (PartialKeypair, PartialKeypair) {
     let signing_key = generate_signing_key();
     let writer_key = PartialKeypair {
