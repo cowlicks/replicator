@@ -82,7 +82,6 @@ impl Replicate for SharedCore {
 #[async_trait::async_trait]
 trait ProtoMethods: Debug + Send + Sync {
     async fn open(&mut self, key: Key) -> std::io::Result<()>;
-    fn receiver_for_all_channel_messages(&self) -> Receiver<Message>;
     async fn _next(&mut self) -> Option<std::io::Result<Event>>;
 }
 
@@ -90,9 +89,6 @@ trait ProtoMethods: Debug + Send + Sync {
 impl<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static> ProtoMethods for Protocol<S> {
     async fn open(&mut self, key: Key) -> std::io::Result<()> {
         Protocol::open(self, key).await
-    }
-    fn receiver_for_all_channel_messages(&self) -> Receiver<Message> {
-        Protocol::receiver_for_all_channel_messages(self)
     }
     async fn _next(&mut self) -> Option<std::io::Result<Event>> {
         futures_lite::StreamExt::next(&mut self).await
@@ -104,8 +100,6 @@ pub struct Peer {
     core: SharedCore,
     /// stream of events to the peer
     protocol: ShareRw<Box<dyn ProtoMethods>>,
-    //  RMME used for debugging
-    message_buff: ShareRw<Vec<Message>>,
 }
 
 impl Debug for Peer {
@@ -113,32 +107,14 @@ impl Debug for Peer {
         f.debug_struct("Peer")
             //.field("core", &self.core)
             //.field("protocol", &self.protocol)
-            .field("message_buff", &self.message_buff)
+            //.field("message_buff", &self.message_buff)
             .finish()
     }
 }
 
 impl Peer {
     fn new(core: SharedCore, protocol: ShareRw<Box<dyn ProtoMethods>>) -> Self {
-        Self {
-            core,
-            protocol,
-            message_buff: Arc::new(RwLock::new(vec![])),
-        }
-    }
-
-    async fn listen_to_channel_messages(&self) {
-        let receiver = self
-            .protocol
-            .read()
-            .await
-            .receiver_for_all_channel_messages();
-        let message_buff = self.message_buff.clone();
-        spawn(async move {
-            while let Ok(msg) = receiver.recv().await {
-                message_buff.write().await.push(msg);
-            }
-        });
+        Self { core, protocol }
     }
 
     async fn start_message_loop(&self, is_initiator: bool) -> Result<(), ReplicatorError> {
@@ -233,7 +209,6 @@ impl Replicator {
         is_initiator: bool,
     ) -> Result<(), ReplicatorError> {
         let peer = self.add_peer(stream, is_initiator).await?;
-        peer.read().await.listen_to_channel_messages().await;
         spawn(async move {
             peer.read().await.start_message_loop(is_initiator).await?;
             Ok::<(), ReplicatorError>(())
