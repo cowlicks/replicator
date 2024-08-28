@@ -1,5 +1,9 @@
-use crate::{Replicate, Replicator, ReplicatorError};
-use hypercore::{generate_signing_key, HypercoreBuilder, PartialKeypair, SharedCore, Storage};
+use crate::{Replicate, ReplicatingCore, ReplicatorError};
+use hypercore::{
+    generate_signing_key,
+    replication::{CoreInfo, SharedCore},
+    HypercoreBuilder, PartialKeypair, Storage,
+};
 use hypercore_protocol::Duplex;
 use piper::{pipe, Reader, Writer};
 

@@ -1,6 +1,11 @@
 use std::time::Duration;
 
-use crate::{utils::create_connected_cores, *};
+use hypercore::{HypercoreBuilder, Storage};
+
+use crate::{
+    utils::{create_connected_cores, create_connected_streams, writer_and_reader_cores},
+    *,
+};
 
 macro_rules! wait {
     () => {

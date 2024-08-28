@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_process::Stdio;
-use hypercore::{PartialKeypair, SharedCore};
+use hypercore::{replication::SharedCore, PartialKeypair};
 use replicator::{Replicate, ReplicatorError};
 use tempfile::TempDir;
 use tokio::net::TcpListener;

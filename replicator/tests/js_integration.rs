@@ -2,15 +2,21 @@ mod common;
 
 use std::time::Duration;
 
-use common::{js::path_to_node_modules, run_replicate, Result};
-use hypercore::{CoreMethods, PartialKeypair, SharedCore, VerifyingKey};
+use hypercore::{
+    replication::{CoreMethods, SharedCore},
+    PartialKeypair, VerifyingKey,
+};
 use macros::start_func_with;
 use tokio::{net::TcpListener, spawn};
-use utils::{make_reader_and_writer_keys, ram_core};
+use utils::ram_core;
 
 use rusty_nodejs_repl::{Config, Repl};
 
-use crate::common::{js::require_js_data, serialize_public_key, LOOPBACK};
+use common::{
+    js::{path_to_node_modules, require_js_data},
+    run_replicate, serialize_public_key, Result, LOOPBACK,
+};
+use replicator::utils::make_reader_and_writer_keys;
 
 async fn rust_writer_js_reader<A: AsRef<[u8]>, B: AsRef<[A]>>(
     batch: B,
