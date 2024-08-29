@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use hypercore::{generate_signing_key, HypercoreBuilder, PartialKeypair, SharedCore, Storage};
+use hypercore::{
+    generate_signing_key, replication::SharedCore, HypercoreBuilder, PartialKeypair, Storage,
+};
 
 pub fn make_reader_and_writer_keys() -> (PartialKeypair, PartialKeypair) {
     let signing_key = generate_signing_key();
