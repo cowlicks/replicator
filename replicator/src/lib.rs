@@ -209,7 +209,7 @@ impl ReplicatingCore {
         &self,
         stream: S,
         is_initiator: bool,
-    ) -> Result<ShareRw<Peer>, ReplicatorError> {
+    ) -> ShareRw<Peer> {
         let core = self.core.clone();
         let protocol = ProtocolBuilder::new(is_initiator).connect(stream);
 
@@ -218,20 +218,19 @@ impl ReplicatingCore {
             Arc::new(RwLock::new(Box::new(protocol))),
         )));
         self.peers.push(peer.clone()).await;
-        Ok(peer)
+        peer
     }
 
     pub async fn add_stream<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static>(
         &self,
         stream: S,
         is_initiator: bool,
-    ) -> Result<(), ReplicatorError> {
-        let peer = self.add_peer(stream, is_initiator).await?;
+    ) {
+        let peer = self.add_peer(stream, is_initiator).await;
         spawn(async move {
             peer.read().await.start_message_loop(is_initiator).await?;
             Ok::<(), ReplicatorError>(())
         });
-        Ok(())
     }
 }
 
