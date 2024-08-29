@@ -1,7 +1,7 @@
 use crate::{Replicate, ReplicatingCore, ReplicatorError};
 use hypercore::{
     generate_signing_key,
-    replication::{CoreInfo, SharedCore},
+    replication::{CoreMethods, SharedCore},
     HypercoreBuilder, PartialKeypair, Storage,
 };
 use hypercore_protocol::Duplex;
@@ -9,7 +9,7 @@ use piper::{pipe, Reader, Writer};
 
 static PIPE_CAPACITY: usize = 1024 * 1024 * 4;
 
-pub async fn public_key(core: &SharedCore) -> PartialKeypair {
+pub async fn public_key(core: &impl CoreMethods) -> PartialKeypair {
     let PartialKeypair { public, .. } = core.key_pair().await;
     let key = PartialKeypair {
         public,
@@ -50,6 +50,26 @@ pub async fn make_slave(master: &SharedCore) -> Result<SharedCore, ReplicatorErr
     Ok(core)
 }
 
+pub async fn make_connected_slave(
+    master: &ReplicatingCore,
+    master_is_initiator: bool,
+) -> Result<ReplicatingCore, ReplicatorError> {
+    let key = public_key(master).await;
+
+    let slave: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await.unwrap())
+        .key_pair(key)
+        .build()
+        .await?
+        .into();
+
+    let (a_b, b_a) = create_connected_streams();
+
+    master.add_stream(a_b, master_is_initiator).await;
+    slave.add_stream(b_a, !master_is_initiator).await;
+
+    Ok(slave)
+}
+
 pub async fn writer_and_reader_cores() -> Result<(SharedCore, SharedCore), ReplicatorError> {
     let writer_core: SharedCore = HypercoreBuilder::new(Storage::new_memory().await?)
         .build()
@@ -77,8 +97,8 @@ pub async fn create_connected_cores<A: AsRef<[u8]>, B: AsRef<[A]>>(
     let server_replicator = writer_core.clone().replicate();
     let client_replicator = reader_core.clone().replicate();
 
-    server_replicator.add_stream(a_b, true).await.unwrap();
-    client_replicator.add_stream(b_a, false).await.unwrap();
+    server_replicator.add_stream(a_b, true).await;
+    client_replicator.add_stream(b_a, false).await;
 
     (
         (writer_core, server_replicator),
