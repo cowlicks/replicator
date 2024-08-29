@@ -141,5 +141,6 @@ pub async fn run_replicate(
 ) -> std::result::Result<(), ReplicatorError> {
     let (socket, _addr) = listener.accept().await?;
     let replicator = core.replicate();
-    replicator.add_stream(socket.compat(), is_initiator).await
+    replicator.add_stream(socket.compat(), is_initiator).await;
+    Ok(())
 }
