@@ -53,17 +53,13 @@ macro_rules! reader_or_writer {
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum ReplicatorError {
-    #[error("There was an error in the opening the protocol in handshake")]
-    // TODO add key and show it
+    #[error("There was an error in the opening the protocol in handshake: [{0}]")]
     IoError(#[from] std::io::Error),
-    #[error("TODO")]
-    // TODO add error and show it
+    #[error("HypercoreError: [{0}]")]
     HypercoreError(#[from] HypercoreError),
-    #[error("TODO")]
-    // TODO add error and show it
+    #[error("ReplMethodsError: [{0}]")]
     ReplMethodsError(#[from] ReplicationMethodsError),
-    #[error("TODO")]
-    // TODO add error and show it
+    #[error("CoreMethodsError: [{0}]")]
     CoreMethodsError(#[from] CoreMethodsError),
 }
 
