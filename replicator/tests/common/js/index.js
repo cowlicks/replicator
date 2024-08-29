@@ -171,10 +171,71 @@ const twoBlocks = (async () => {
   await pause();
 });
 
+const small_path_topology = (async () => {
+  const data = [[0], [1], [2]];
+
+  const master = new Hypercore(RAM, undefined, {name: 'MASTER'});
+  await master.ready();
+  await master.append(Buffer.from([0]));
+
+  const first_peer = new Hypercore(RAM, master.key, {name: 'FIRST'});
+  await first_peer.ready();
+
+  const s1 = master.replicate(false, { keepAlive: false });
+  const s2 = first_peer.replicate(true, { keepAlive: false });
+  s1.pipe(s2).pipe(s1);
+  await pause();
+
+  let r1 = await first_peer.get(0);
+  console.log('------------------------------------');
+  console.log(r1);
+  console.log('------------------------------------');
+
+  const second_peer = new Hypercore(RAM, master.key, {name: 'SECOND'});
+  await second_peer.ready();
+
+  const s3 = first_peer.replicate(false, { keepAlive: false });
+  const s4 = second_peer.replicate(true, { keepAlive: false });
+  s3.pipe(s4).pipe(s3);
+  console.log('QQQ'); 
+  await pause();
+
+  let r2 = await first_peer.get(0);
+  console.log('------------------------------------');
+  if (!arr_equal(Buffer.from([0]), r2)) {
+    throw new Error("sntshshsh");
+  }
+  console.log('------------------------------------');
+
+  await master.append(Buffer.from([1]));
+  console.log("ZZZ");
+  await pause();
+
+  let r3 = await first_peer.get(1);
+  console.log('------------------------------------');
+  console.log(r3);
+  if (!arr_equal(Buffer.from([1]), r3)) {
+    throw new Error("sntshshsh");
+  }
+  console.log('------------------------------------');
+
+  await pause();
+
+  let r4 = await second_peer.get(1);
+  console.log('------------------------------------');
+  console.log(r4);
+  if (!arr_equal(Buffer.from([1]), r4)) {
+    throw new Error("sntshshsh");
+  }
+  console.log('------------------------------------');
+
+});
+
 
 (async () => {
   //await noInitialData();
   //await one_block_before();
   //await initial_sync();
-  await append_many_foreach_reader_update_reader_get();
+  //await append_many_foreach_reader_update_reader_get();
+  await small_path_topology()
 })()
