@@ -263,7 +263,6 @@ async fn initiate_sync(
     peer_state: ShareRw<PeerState>,
     channel: &mut Channel,
 ) -> Result<(), ReplicatorError> {
-    let name = reader_or_writer!(core);
     let info = core.info().await;
     if info.fork != peer_state.read().await.remote_fork {
         peer_state.write().await.can_upgrade = false;
@@ -289,12 +288,10 @@ async fn initiate_sync(
             start: 0,
             length: info.contiguous_length,
         };
-        trace!("\n\t{name} Channel TX:[\n\t{sync_msg:#?},\n\t{range_msg:#?}\n])");
         channel
             .send_batch(&[Message::Synchronize(sync_msg), Message::Range(range_msg)])
             .await?;
     } else {
-        trace!("\n\t{name} Channel TX:\n\t{sync_msg:#?})");
         channel.send(Message::Synchronize(sync_msg)).await?;
     }
     Ok(())
@@ -319,7 +316,7 @@ async fn on_get_loop(
 ) -> Result<(), ReplicatorError> {
     let mut on_get_events = core.on_get_subscribe().await;
     while let Ok((index, _tx)) = on_get_events.recv().await {
-        trace!("got core upgrade event. Notifying peers");
+        trace!("got on_get({index}) event. Notifying peers");
         on_get(core.clone(), channel.clone(), index);
     }
     Ok(())
@@ -397,7 +394,7 @@ async fn on_message_inner(
     message: Message,
 ) -> Result<(), ReplicatorError> {
     let name = reader_or_writer!(core);
-    trace!("{name} onmessage {}", message.kind());
+    trace!("{name}:{}:RX {}", channel.name, message.kind());
     match message {
         Message::Synchronize(message) => {
             let peer_length_changed = message.length != peer_state.read().await.remote_length;
@@ -453,14 +450,12 @@ async fn on_message_inner(
 
                 messages.push(Message::Request(msg));
             }
-            trace!("\n\t{name} Channel TX:\n\t{messages:#?}");
             if !messages.is_empty() {
                 channel.send_batch(&messages).await?;
             }
         }
 
         Message::Request(message) => {
-            trace!("Got Request message {message:?}");
             let (info, proof) = {
                 let proof = core
                     .create_proof(message.block, message.hash, message.seek, message.upgrade)
@@ -482,7 +477,6 @@ async fn on_message_inner(
         }
 
         Message::Data(message) => {
-            trace!("Got Data message Data {{...}}");
             let (_old_info, _applied, new_info, request_block) = {
                 let old_info = core.info().await;
 
@@ -552,8 +546,9 @@ async fn on_message_inner(
                     upgrade: None,
                 }));
             }
-            trace!("\n\t{name} Channel TX:\n\t{messages:#?}");
-            channel.send_batch(&messages).await.unwrap();
+            if !messages.is_empty() {
+                channel.send_batch(&messages).await.unwrap();
+            }
         }
 
         _ => {}

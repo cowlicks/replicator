@@ -1,15 +1,21 @@
+#![allow(unused_variables)]
 use std::time::Duration;
 
 use hypercore::{HypercoreBuilder, Storage};
+use tracing_subscriber::EnvFilter;
 
 use crate::{
-    utils::{create_connected_cores, create_connected_streams, writer_and_reader_cores},
+    utils::{create_connected_cores, make_connected_slave},
     *,
 };
 
+const DEFAULT_MILLIS: u64 = 100;
 macro_rules! wait {
+    ($millis:expr) => {
+        tokio::time::sleep(Duration::from_millis($millis)).await;
+    };
     () => {
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        wait!(DEFAULT_MILLIS)
     };
 }
 
