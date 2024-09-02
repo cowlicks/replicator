@@ -30,7 +30,7 @@ use hypercore::{
         CoreInfo, CoreMethods, CoreMethodsError, ReplicationMethods, ReplicationMethodsError,
         SharedCore,
     },
-    Hypercore, HypercoreError, RequestBlock, RequestUpgrade,
+    Hypercore, HypercoreError, OnAppendEvent, RequestBlock, RequestUpgrade,
 };
 use hypercore_protocol::{
     discovery_key,
@@ -261,6 +261,7 @@ impl CoreMethods for ReplicatingCore {
 async fn initiate_sync(
     core: impl ReplicationMethods + Clone + 'static,
     peer_state: ShareRw<PeerState>,
+    on_append_event: Option<OnAppendEvent>,
     channel: &mut Channel,
 ) -> Result<(), ReplicatorError> {
     let info = core.info().await;
@@ -273,27 +274,32 @@ async fn initiate_sync(
         0
     };
 
-    let sync_msg = Synchronize {
+    let mut out = vec![];
+
+    out.push(Message::Synchronize(Synchronize {
         fork: info.fork,
         length: info.length,
         remote_length,
         can_upgrade: peer_state.read().await.can_upgrade,
         uploading: true,
         downloading: true,
-    };
+    }));
 
     if info.contiguous_length > 0 {
-        let range_msg = Range {
-            drop: false,
-            start: 0,
-            length: info.contiguous_length,
-        };
-        channel
-            .send_batch(&[Message::Synchronize(sync_msg), Message::Range(range_msg)])
-            .await?;
-    } else {
-        channel.send(Message::Synchronize(sync_msg)).await?;
+        out.push(Message::Range(match on_append_event {
+            None => Range {
+                drop: false,
+                start: 0,
+                length: info.contiguous_length,
+            },
+            Some(evt) => Range {
+                drop: false,
+                start: evt.start,
+                length: evt.length,
+            },
+        }));
     }
+    channel.send_batch(&out).await?;
     Ok(())
 }
 
@@ -303,9 +309,9 @@ async fn core_event_loop(
     mut channel: Channel,
 ) -> Result<(), ReplicatorError> {
     let mut on_append = core.on_append_subscribe().await;
-    while let Ok(_event) = on_append.recv().await {
+    while let Ok(event) = on_append.recv().await {
         trace!("got core upgrade event. Notifying peers");
-        initiate_sync(core.clone(), peer_state.clone(), &mut channel).await?
+        initiate_sync(core.clone(), peer_state.clone(), Some(event), &mut channel).await?
     }
     Ok(())
 }
@@ -354,7 +360,7 @@ async fn on_get_inner(
 async fn on_peer(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
     let peer_state = Arc::new(RwLock::new(PeerState::default()));
 
-    initiate_sync(core.clone(), peer_state.clone(), &mut channel).await?;
+    initiate_sync(core.clone(), peer_state.clone(), None, &mut channel).await?;
 
     let _event_loop = spawn(core_event_loop(
         core.clone(),
