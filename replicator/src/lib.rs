@@ -27,10 +27,10 @@ use tokio::{spawn, sync::RwLock, task::JoinHandle};
 
 use hypercore::{
     replication::{
-        CoreInfo, CoreMethods, CoreMethodsError, ReplicationMethods, ReplicationMethodsError,
-        SharedCore,
+        events::OnAppendEvent, CoreInfo, CoreMethods, CoreMethodsError, ReplicationMethods,
+        ReplicationMethodsError, SharedCore,
     },
-    Hypercore, HypercoreError, OnAppendEvent, RequestBlock, RequestUpgrade,
+    Hypercore, HypercoreError, RequestBlock, RequestUpgrade,
 };
 use hypercore_protocol::{
     discovery_key,
@@ -303,30 +303,48 @@ async fn initiate_sync(
     Ok(())
 }
 
-async fn core_event_loop(
+async fn core_message_loop(
     core: impl ReplicationMethods + Clone + 'static,
     peer_state: ShareRw<PeerState>,
-    mut channel: Channel,
+    channel: Channel,
 ) -> Result<(), ReplicatorError> {
-    let mut on_append = core.on_append_subscribe().await;
-    while let Ok(event) = on_append.recv().await {
-        trace!("got core upgrade event. Notifying peers");
-        initiate_sync(core.clone(), peer_state.clone(), Some(event), &mut channel).await?
+    use hypercore::EventMsg::*;
+
+    let mut events = core.event_subscribe().await;
+    while let Ok(event) = events.recv().await {
+        match event {
+            OnAppend(on_append) => {
+                _ = spawn(on_append_handler(
+                    core.clone(),
+                    peer_state.clone(),
+                    on_append,
+                    channel.clone(),
+                ));
+            }
+            OnGet(evt) => {
+                _ = spawn(on_get(core.clone(), channel.clone(), evt.index));
+            }
+        }
     }
     Ok(())
 }
 
-async fn on_get_loop(
+async fn on_append_handler(
     core: impl ReplicationMethods + Clone + 'static,
-    channel: Channel,
+    peer_state: ShareRw<PeerState>,
+    on_append_event: OnAppendEvent,
+    mut channel: Channel,
 ) -> Result<(), ReplicatorError> {
-    let mut on_get_events = core.on_get_subscribe().await;
-    while let Ok((index, _tx)) = on_get_events.recv().await {
-        trace!("got on_get({index}) event. Notifying peers");
-        on_get(core.clone(), channel.clone(), index);
-    }
+    initiate_sync(
+        core.clone(),
+        peer_state.clone(),
+        Some(on_append_event),
+        &mut channel,
+    )
+    .await?;
     Ok(())
 }
+
 fn on_get(
     core: impl ReplicationMethods + 'static,
     channel: Channel,
@@ -362,13 +380,11 @@ async fn on_peer(core: SharedCore, mut channel: Channel) -> Result<(), Replicato
 
     initiate_sync(core.clone(), peer_state.clone(), None, &mut channel).await?;
 
-    let _event_loop = spawn(core_event_loop(
+    let _core_event_loop = spawn(core_message_loop(
         core.clone(),
         peer_state.clone(),
         channel.clone(),
     ));
-
-    let _on_get_loop = spawn(on_get_loop(core.clone(), channel.clone()));
 
     let _channel_rx_loop = spawn(async move {
         while let Some(message) = channel.next().await {
