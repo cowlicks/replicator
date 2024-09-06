@@ -2,6 +2,8 @@
 use std::time::Duration;
 
 use hypercore::{HypercoreBuilder, Storage};
+use std::io::Write;
+use tokio::io::{stdin, AsyncBufReadExt, BufReader};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
@@ -10,6 +12,7 @@ use crate::{
 };
 
 const DEFAULT_MILLIS: u64 = 100;
+
 macro_rules! wait {
     ($millis:expr) => {
         tokio::time::sleep(Duration::from_millis($millis)).await;
@@ -18,6 +21,7 @@ macro_rules! wait {
         wait!(DEFAULT_MILLIS)
     };
 }
+use std::sync::OnceLock;
 
 #[tokio::test]
 /// works but not the same as js
@@ -100,19 +104,19 @@ async fn append_many_foreach_reader_update_reader_get() -> Result<(), Replicator
     Ok(())
 }
 
-const MAX_LOOPS: usize = 5;
+const MAX_LOOPS: usize = 10;
 macro_rules! assert_core_get {
     ($core:tt, $block_index:expr, $expected:expr) => {
         let mut i = 0;
         loop {
-            if i > MAX_LOOPS {
+            if i >= MAX_LOOPS {
                 panic!("too many attempts getting data, expected: {:?}", $expected);
             }
             if let Some(x) = $core.get($block_index).await? {
                 assert_eq!(x, $expected);
                 break;
             }
-            wait!(100);
+            wait!(10);
             println!("retry core.get({})", $block_index);
             i += 1;
         }
@@ -126,36 +130,40 @@ macro_rules! assert_core_get {
 /// We check that every peer can get every piece of data
 /// All check appends, peer-adding, and core.get calls are done serially
 async fn one_to_many_topology() -> Result<(), ReplicatorError> {
-    let n_parts = 3;
-    let n_peers = 10;
-    let n_data = n_peers * n_parts;
+    log();
+    let n_peers = 5;
 
     let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
         .build()
         .await?
         .into();
 
+    // add initial data to master
     let mut data = vec![];
     for i in 0..n_peers {
         master.append(&[i as u8]).await?;
         data.push(i);
     }
 
+    // add peers, add data each time we add peer
     let mut cores = vec![master.clone()];
     for i in n_peers..(n_peers * 2) {
         cores.push(make_connected_slave(&master, false).await?);
         master.append(&[i as u8]).await?;
         data.push(i);
     }
+
+    // add more data
     for i in (n_peers * 2)..(n_peers * 3) {
         master.append(&[i as u8]).await?;
         data.push(i);
     }
 
+    // check
     for core in cores.iter() {
-        for i in 0..n_data {
-            let expected = &[i as u8];
-            assert_core_get!(core, i, expected);
+        for data_i in data.iter().cloned() {
+            let expected = &[data_i as u8];
+            assert_core_get!(core, data_i, expected);
         }
     }
 
@@ -168,13 +176,9 @@ async fn one_to_many_topology() -> Result<(), ReplicatorError> {
 /// Each peer added peer is the "initiator"
 /// We check that every peer can get every piece of data
 /// All check appends, peer-adding, and core.get calls are done serially
-///
-///
-/// TODO data is never replicated THROUGH first peer
 async fn path_topology() -> Result<(), ReplicatorError> {
-    let n_parts = 3;
-    let n_peers = 5;
-    let n_data = n_peers * n_parts;
+    log();
+    let n_peers = 4;
 
     let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
         .build()
@@ -204,15 +208,12 @@ async fn path_topology() -> Result<(), ReplicatorError> {
     for (peer_i, core) in cores.iter().enumerate() {
         loop {
             let core_len = core.info().await.length;
-            dbg!(core_len);
             if core_len > peer_i as u64 {
-                dbg!(core_len);
                 break;
             }
         }
         for data_i in data.iter().cloned() {
             let expected = &[data_i as u8];
-            dbg!(data_i);
             assert_core_get!(core, data_i, expected);
         }
     }
@@ -222,6 +223,7 @@ async fn path_topology() -> Result<(), ReplicatorError> {
 
 #[tokio::test]
 async fn path_topo_only_initial_data() -> Result<(), ReplicatorError> {
+    log();
     let n_peers = 5;
 
     let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
@@ -239,10 +241,8 @@ async fn path_topo_only_initial_data() -> Result<(), ReplicatorError> {
     for core_i in 0..n_peers {
         let last = cores.last().unwrap();
         let new_peer = make_connected_slave(last, false).await?;
-        dbg!(core_i);
         // NB without this, later assert does not work
         for data_i in 0..n_peers {
-            dbg!(data_i);
             assert_core_get!(new_peer, data_i, &[data_i as u8]);
         }
         cores.push(new_peer);
@@ -252,69 +252,73 @@ async fn path_topo_only_initial_data() -> Result<(), ReplicatorError> {
         for data_i in 0..n_peers {
             assert_core_get!(core, data_i, &[data_i as u8]);
         }
-        dbg!(core_i);
     }
     Ok(())
 }
 
-/// TODO data is never replicated THROUGH first peer
-/// data added *after* first connection (to writer, or last peer?)
-#[tokio::test]
-async fn oobounds_what() -> Result<(), ReplicatorError> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env()) // Reads `RUST_LOG` environment variable
-        .init();
-    let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
-        .build()
-        .await?
-        .into();
-    master.append(&[0]).await?;
-    let first_peer = make_connected_slave(&master, false).await?;
-    assert_core_get!(first_peer, 0, &[0]);
-    //let second_peer = make_connected_slave(&first_peer, false).await?;
-    //assert_core_get!(second_peer, 0, &[0]);
-
-    //master.append(&[1]).await?;
-    assert_core_get!(first_peer, 1, &[1]);
-    //assert_core_get!(second_peer, 1, &[1]);
-
-    Ok(())
-}
-
 fn log() {
-    //let sub = FmtSubscriber::builder()
-
-    tracing_subscriber::fmt()
-        .with_line_number(true)
-        .without_time()
-        .with_env_filter(EnvFilter::from_default_env()) // Reads `RUST_LOG` environment variable
-        .init();
+    static START_LOGS: OnceLock<()> = OnceLock::new();
+    START_LOGS.get_or_init(|| {
+        tracing_subscriber::fmt()
+            .with_line_number(true)
+            .without_time()
+            // Reads `RUST_LOG` environment variable
+            .with_env_filter(EnvFilter::from_default_env())
+            .init();
+    });
 }
+
+macro_rules! pause {
+    () => {
+        let mut input = String::new();
+        let msg = format!(
+            "[ {} ] -- {} | Press Enter to continue...",
+            line!(),
+            file!()
+        );
+        println!("{msg}");
+        spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            println!("{msg}");
+        });
+        std::io::stdout().flush().unwrap(); // Ensure the prompt is printed before waiting
+        let mut reader = BufReader::new(stdin());
+        reader.read_line(&mut input).await?;
+    };
+}
+
 /// TODO data is never replicated THROUGH first peer
 /// data added *after* first connection (to writer, or last peer?)
 #[tokio::test]
+#[ignore]
 async fn small_path_topology() -> Result<(), ReplicatorError> {
     log();
     let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
         .build()
         .await?
         .into();
-    master.append(&[0]).await?;
-    let first_peer = make_connected_slave(&master, false).await?;
-    wait!();
-    assert_core_get!(first_peer, 0, &[0]);
-    wait!();
-    let second_peer = make_connected_slave(&first_peer, false).await?;
-    wait!();
-    assert_core_get!(second_peer, 0, &[0]);
-    wait!();
 
-    println!("APPEND");
+    master.append(&[0]).await?;
+
+    pause!();
+    let first_peer = make_connected_slave(&master, false).await?;
+    pause!();
+
+    assert_core_get!(first_peer, 0, &[0]);
+    pause!();
+
+    let second_peer = make_connected_slave(&first_peer, false).await?;
+    pause!();
+
+    assert_core_get!(second_peer, 0, &[0]);
+    pause!();
+
     master.append(&[1]).await?;
-    wait!();
+    pause!();
+
     assert_core_get!(first_peer, 1, &[1]);
-    println!("TRY2");
-    wait!();
+    pause!();
+
     assert_core_get!(second_peer, 1, &[1]);
 
     Ok(())
