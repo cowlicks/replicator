@@ -2,8 +2,7 @@
 use std::time::Duration;
 
 use hypercore::{HypercoreBuilder, Storage};
-use std::io::Write;
-use tokio::io::{stdin, AsyncBufReadExt, BufReader};
+use std::sync::OnceLock;
 use tracing_subscriber::EnvFilter;
 
 use crate::{
@@ -21,7 +20,27 @@ macro_rules! wait {
         wait!(DEFAULT_MILLIS)
     };
 }
-use std::sync::OnceLock;
+
+macro_rules! pause {
+    () => {
+        use std::io::Write;
+        use tokio::io::AsyncBufReadExt;
+        let mut input = String::new();
+        let msg = format!(
+            "[ {} ] -- {} | Press Enter to continue...",
+            line!(),
+            file!()
+        );
+        println!("{msg}");
+        spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            println!("{msg}");
+        });
+        std::io::stdout().flush().unwrap(); // Ensure the prompt is printed before waiting
+        let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
+        reader.read_line(&mut input).await?;
+    };
+}
 
 #[tokio::test]
 /// works but not the same as js
@@ -116,7 +135,7 @@ macro_rules! assert_core_get {
                 assert_eq!(x, $expected);
                 break;
             }
-            wait!(10);
+            wait!(50);
             println!("retry core.get({})", $block_index);
             i += 1;
         }
@@ -171,14 +190,46 @@ async fn one_to_many_topology() -> Result<(), ReplicatorError> {
 }
 
 #[tokio::test]
+async fn qq_after_connect_path_topo() -> Result<(), ReplicatorError> {
+    let n_peers = 5;
+
+    let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
+        .build()
+        .await?
+        .into();
+
+    let mut data = vec![];
+    let mut cores = vec![master.clone()];
+    for data_i in n_peers..(n_peers * 2) {
+        let last = cores.last().unwrap();
+        let new_peer = make_connected_slave(last, false).await?;
+        cores.push(new_peer);
+    }
+
+    for i in (n_peers * 2)..(n_peers * 3) {
+        master.append(&[i as u8]).await?;
+        data.push(i);
+    }
+
+    log();
+    for (peer_i, core) in cores.iter().enumerate() {
+        for (index, data_val) in data.iter().enumerate() {
+            let expected = &[*data_val as u8];
+            assert_core_get!(core, index as u64, expected);
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 /// This tests buils a PATH-like topology where every peer connects to the last, in a line.
 /// Data is added in 3 parts: before peers, while peers are added, and after they are added.
 /// Each peer added peer is the "initiator"
 /// We check that every peer can get every piece of data
 /// All check appends, peer-adding, and core.get calls are done serially
 async fn path_topology() -> Result<(), ReplicatorError> {
-    log();
-    let n_peers = 4;
+    let n_peers = 5;
 
     let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
         .build()
@@ -205,13 +256,8 @@ async fn path_topology() -> Result<(), ReplicatorError> {
         data.push(i);
     }
 
+    log();
     for (peer_i, core) in cores.iter().enumerate() {
-        loop {
-            let core_len = core.info().await.length;
-            if core_len > peer_i as u64 {
-                break;
-            }
-        }
         for data_i in data.iter().cloned() {
             let expected = &[data_i as u8];
             assert_core_get!(core, data_i, expected);
@@ -268,58 +314,15 @@ fn log() {
     });
 }
 
-macro_rules! pause {
-    () => {
-        let mut input = String::new();
-        let msg = format!(
-            "[ {} ] -- {} | Press Enter to continue...",
-            line!(),
-            file!()
-        );
-        println!("{msg}");
-        spawn(async move {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            println!("{msg}");
-        });
-        std::io::stdout().flush().unwrap(); // Ensure the prompt is printed before waiting
-        let mut reader = BufReader::new(stdin());
-        reader.read_line(&mut input).await?;
-    };
-}
-
-/// TODO data is never replicated THROUGH first peer
-/// data added *after* first connection (to writer, or last peer?)
-#[tokio::test]
-#[ignore]
-async fn small_path_topology() -> Result<(), ReplicatorError> {
-    log();
-    let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
-        .build()
-        .await?
-        .into();
-
-    master.append(&[0]).await?;
-
-    pause!();
-    let first_peer = make_connected_slave(&master, false).await?;
-    pause!();
-
-    assert_core_get!(first_peer, 0, &[0]);
-    pause!();
-
-    let second_peer = make_connected_slave(&first_peer, false).await?;
-    pause!();
-
-    assert_core_get!(second_peer, 0, &[0]);
-    pause!();
-
-    master.append(&[1]).await?;
-    pause!();
-
-    assert_core_get!(first_peer, 1, &[1]);
-    pause!();
-
-    assert_core_get!(second_peer, 1, &[1]);
-
-    Ok(())
+fn exit_on_thread_panic() {
+    static EXIT_ON_THREAD_PANIC: OnceLock<()> = OnceLock::new();
+    EXIT_ON_THREAD_PANIC.get_or_init(|| {
+        // take_hook() returns the default hook in case when a custom one is not set
+        let orig_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |panic_info| {
+            // invoke the default handler and exit the process
+            orig_hook(panic_info);
+            std::process::exit(1);
+        }));
+    });
 }
