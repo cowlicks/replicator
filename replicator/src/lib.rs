@@ -27,8 +27,8 @@ use tokio::{spawn, sync::RwLock, task::JoinHandle};
 
 use hypercore::{
     replication::{
-        events::OnAppendEvent, CoreInfo, CoreMethods, CoreMethodsError, ReplicationMethods,
-        ReplicationMethodsError, SharedCore,
+        CoreInfo, CoreMethods, CoreMethodsError, ReplicationMethods, ReplicationMethodsError,
+        SharedCore,
     },
     Hypercore, HypercoreError, RequestBlock, RequestUpgrade,
 };
@@ -261,7 +261,6 @@ impl CoreMethods for ReplicatingCore {
 async fn initiate_sync(
     core: impl ReplicationMethods + Clone + 'static,
     peer_state: ShareRw<PeerState>,
-    on_append_event: Option<OnAppendEvent>,
     channel: &mut Channel,
 ) -> Result<(), ReplicatorError> {
     let info = core.info().await;
@@ -286,17 +285,10 @@ async fn initiate_sync(
     }));
 
     if info.contiguous_length > 0 {
-        out.push(Message::Range(match on_append_event {
-            None => Range {
-                drop: false,
-                start: 0,
-                length: info.contiguous_length,
-            },
-            Some(evt) => Range {
-                drop: false,
-                start: evt.start,
-                length: evt.length,
-            },
+        out.push(Message::Range(Range {
+            drop: false,
+            start: 0,
+            length: info.contiguous_length,
         }));
     }
     channel.send_batch(&out).await?;
@@ -313,23 +305,12 @@ async fn core_message_loop(
     let mut events = core.event_subscribe().await;
     while let Ok(event) = events.recv().await {
         match event {
-            OnAppend(on_append) => {
-                dbg!(&on_append);
-                // need to have an event emitted when storage has data added
-                // to remove this
-                _ = spawn(handlers::append(
-                    core.clone(),
-                    peer_state.clone(),
-                    channel.clone(),
-                    on_append,
-                ));
-            }
             OnGet(evt) => {
                 _ = spawn(handlers::get(core.clone(), channel.clone(), evt.index));
             }
-            OnDataBlocks(evt) => {
+            OnHave(evt) => {
                 dbg!(&evt);
-                _ = spawn(handlers::data_blocks(channel.clone(), evt));
+                _ = spawn(handlers::have(channel.clone(), evt));
             }
             OnDataUgrade(evt) => {
                 dbg!(&evt);
@@ -346,13 +327,10 @@ async fn core_message_loop(
 }
 
 mod handlers {
-    use hypercore::replication::events::{OnDataBlocksEvent, OnDataUpgradeEvent};
+    use hypercore::replication::events::{OnDataUpgradeEvent, OnHaveEvent};
 
     use super::*;
-    pub async fn data_blocks(
-        mut channel: Channel,
-        event: OnDataBlocksEvent,
-    ) -> Result<(), ReplicatorError> {
+    pub async fn have(mut channel: Channel, event: OnHaveEvent) -> Result<(), ReplicatorError> {
         channel
             .send(Message::Range(Range {
                 drop: event.drop,
@@ -383,22 +361,6 @@ mod handlers {
                 can_upgrade,
             }))
             .await?;
-        Ok(())
-    }
-
-    pub async fn append(
-        core: impl ReplicationMethods + Clone + 'static,
-        peer_state: ShareRw<PeerState>,
-        mut channel: Channel,
-        on_append_event: OnAppendEvent,
-    ) -> Result<(), ReplicatorError> {
-        initiate_sync(
-            core.clone(),
-            peer_state.clone(),
-            Some(on_append_event),
-            &mut channel,
-        )
-        .await?;
         Ok(())
     }
 
@@ -434,7 +396,7 @@ mod handlers {
 async fn on_peer(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
     let peer_state = Arc::new(RwLock::new(PeerState::default()));
 
-    initiate_sync(core.clone(), peer_state.clone(), None, &mut channel).await?;
+    initiate_sync(core.clone(), peer_state.clone(), &mut channel).await?;
 
     let _core_event_loop = spawn(core_message_loop(
         core.clone(),
