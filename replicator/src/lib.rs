@@ -21,7 +21,7 @@ use std::{fmt::Debug, marker::Unpin, sync::Arc};
 use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
 
 use thiserror::Error;
-use tracing::{error, trace, warn};
+use tracing::{debug, error, instrument, trace, warn};
 
 use tokio::{spawn, sync::RwLock, task::JoinHandle};
 
@@ -314,65 +314,121 @@ async fn core_message_loop(
     while let Ok(event) = events.recv().await {
         match event {
             OnAppend(on_append) => {
-                _ = spawn(on_append_handler(
+                dbg!(&on_append);
+                // need to have an event emitted when storage has data added
+                // to remove this
+                _ = spawn(handlers::append(
                     core.clone(),
                     peer_state.clone(),
-                    on_append,
                     channel.clone(),
+                    on_append,
                 ));
             }
             OnGet(evt) => {
-                _ = spawn(on_get(core.clone(), channel.clone(), evt.index));
+                _ = spawn(handlers::get(core.clone(), channel.clone(), evt.index));
+            }
+            OnDataBlocks(evt) => {
+                dbg!(&evt);
+                _ = spawn(handlers::data_blocks(channel.clone(), evt));
+            }
+            OnDataUgrade(evt) => {
+                dbg!(&evt);
+                let _ = spawn(handlers::data_upgrade(
+                    core.clone(),
+                    peer_state.clone(),
+                    channel.clone(),
+                    evt,
+                ));
             }
         }
     }
     Ok(())
 }
 
-async fn on_append_handler(
-    core: impl ReplicationMethods + Clone + 'static,
-    peer_state: ShareRw<PeerState>,
-    on_append_event: OnAppendEvent,
-    mut channel: Channel,
-) -> Result<(), ReplicatorError> {
-    initiate_sync(
-        core.clone(),
-        peer_state.clone(),
-        Some(on_append_event),
-        &mut channel,
-    )
-    .await?;
-    Ok(())
-}
+mod handlers {
+    use hypercore::replication::events::{OnDataBlocksEvent, OnDataUpgradeEvent};
 
-fn on_get(
-    core: impl ReplicationMethods + 'static,
-    channel: Channel,
-    index: u64,
-) -> JoinHandle<Result<(), ReplicatorError>> {
-    spawn(on_get_inner(core, channel, index))
-}
+    use super::*;
+    pub async fn data_blocks(
+        mut channel: Channel,
+        event: OnDataBlocksEvent,
+    ) -> Result<(), ReplicatorError> {
+        channel
+            .send(Message::Range(Range {
+                drop: event.drop,
+                start: event.start,
+                length: event.length,
+            }))
+            .await?;
+        Ok(())
+    }
+    pub async fn data_upgrade(
+        core: impl ReplicationMethods + Clone + 'static,
+        peer_state: ShareRw<PeerState>,
+        mut channel: Channel,
+        _event: OnDataUpgradeEvent,
+    ) -> Result<(), ReplicatorError> {
+        let info = core.info().await;
+        let (can_upgrade, remote_length) = {
+            let ps = peer_state.read().await;
+            (ps.can_upgrade, ps.remote_length)
+        };
+        channel
+            .send(Message::Synchronize(Synchronize {
+                fork: info.fork,
+                length: info.length,
+                remote_length,
+                downloading: true,
+                uploading: true,
+                can_upgrade,
+            }))
+            .await?;
+        Ok(())
+    }
 
-async fn on_get_inner(
-    core: impl ReplicationMethods,
-    mut channel: Channel,
-    index: u64,
-) -> Result<(), ReplicatorError> {
-    let block = RequestBlock {
-        index,
-        nodes: core.missing_nodes(index).await?,
-    };
-    let msg = Message::Request(Request {
-        fork: core.info().await.fork,
-        id: block.index + 1,
-        block: Some(block),
-        hash: None,
-        seek: None,
-        upgrade: None,
-    });
+    pub async fn append(
+        core: impl ReplicationMethods + Clone + 'static,
+        peer_state: ShareRw<PeerState>,
+        mut channel: Channel,
+        on_append_event: OnAppendEvent,
+    ) -> Result<(), ReplicatorError> {
+        initiate_sync(
+            core.clone(),
+            peer_state.clone(),
+            Some(on_append_event),
+            &mut channel,
+        )
+        .await?;
+        Ok(())
+    }
 
-    channel.send_batch(&[msg]).await?;
-    Ok(())
+    // TODO problem here when index >= length
+    // this will request the data but the it might not have the length yet
+    // what does js do here?
+    #[instrument(skip(core, channel))]
+    pub async fn get(
+        core: impl ReplicationMethods,
+        mut channel: Channel,
+        index: u64,
+    ) -> Result<(), ReplicatorError> {
+        let block = RequestBlock {
+            index,
+            nodes: core.missing_nodes(index).await?,
+        };
+        let name = reader_or_writer!(core);
+        debug!("{name} sending request");
+        let msg = Message::Request(Request {
+            fork: core.info().await.fork,
+            id: block.index + 1,
+            block: Some(block),
+            hash: None,
+            seek: None,
+            upgrade: None,
+        });
+
+        channel.send_batch(&[msg]).await?;
+        Ok(())
+    }
 }
 
 async fn on_peer(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
@@ -458,6 +514,8 @@ async fn on_message_inner(
                 // and peer's length has changed
                 && peer_length_changed
             {
+                let name = reader_or_writer!(core);
+                debug!("{name} sending request");
                 let msg = Request {
                     id: 1, // There should be proper handling for in-flight request ids
                     fork: info.fork,
@@ -499,7 +557,7 @@ async fn on_message_inner(
         }
 
         Message::Data(message) => {
-            let (_old_info, _applied, new_info, request_block) = {
+            let (_old_info, _applied, _new_info, _request_block) = {
                 let old_info = core.info().await;
 
                 let proof = message.clone().into_proof();
@@ -539,38 +597,6 @@ async fn on_message_inner(
                 }
                 (old_info, applied, new_info, request_block)
             };
-
-            let mut messages: Vec<Message> = vec![];
-
-            // If we got an upgrade send a Sync
-            if message.upgrade.is_some() {
-                let remote_length = if new_info.fork == peer_state.read().await.remote_fork {
-                    peer_state.read().await.remote_length
-                } else {
-                    0
-                };
-                messages.push(Message::Synchronize(Synchronize {
-                    fork: new_info.fork,
-                    length: new_info.length,
-                    remote_length,
-                    can_upgrade: false,
-                    uploading: true,
-                    downloading: true,
-                }));
-            }
-            if let Some(request_block) = request_block {
-                messages.push(Message::Request(Request {
-                    id: request_block.index + 1,
-                    fork: new_info.fork,
-                    hash: None,
-                    block: Some(request_block),
-                    seek: None,
-                    upgrade: None,
-                }));
-            }
-            if !messages.is_empty() {
-                channel.send_batch(&messages).await.unwrap();
-            }
         }
 
         _ => {}
