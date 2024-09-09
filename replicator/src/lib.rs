@@ -295,25 +295,28 @@ async fn initiate_sync(
     Ok(())
 }
 
-async fn core_message_loop(
+async fn core_event_loop(
     core: impl ReplicationMethods + Clone + 'static,
     peer_state: ShareRw<PeerState>,
     channel: Channel,
 ) -> Result<(), ReplicatorError> {
-    use hypercore::EventMsg::*;
+    use hypercore::replication::Event::*;
 
     let mut events = core.event_subscribe().await;
     while let Ok(event) = events.recv().await {
         match event {
-            OnGet(evt) => {
-                _ = spawn(handlers::get(core.clone(), channel.clone(), evt.index));
+            Get(evt) => {
+                _ = spawn(handlers::get(
+                    core.clone(),
+                    peer_state.clone(),
+                    channel.clone(),
+                    evt.index,
+                ));
             }
-            OnHave(evt) => {
-                dbg!(&evt);
+            Have(evt) => {
                 _ = spawn(handlers::have(channel.clone(), evt));
             }
-            OnDataUgrade(evt) => {
-                dbg!(&evt);
+            DataUpgrade(evt) => {
                 let _ = spawn(handlers::data_upgrade(
                     core.clone(),
                     peer_state.clone(),
@@ -327,10 +330,10 @@ async fn core_message_loop(
 }
 
 mod handlers {
-    use hypercore::replication::events::{OnDataUpgradeEvent, OnHaveEvent};
+    use hypercore::replication::events::{DataUpgrade, Have};
 
     use super::*;
-    pub async fn have(mut channel: Channel, event: OnHaveEvent) -> Result<(), ReplicatorError> {
+    pub async fn have(mut channel: Channel, event: Have) -> Result<(), ReplicatorError> {
         channel
             .send(Message::Range(Range {
                 drop: event.drop,
@@ -344,7 +347,7 @@ mod handlers {
         core: impl ReplicationMethods + Clone + 'static,
         peer_state: ShareRw<PeerState>,
         mut channel: Channel,
-        _event: OnDataUpgradeEvent,
+        _event: DataUpgrade,
     ) -> Result<(), ReplicatorError> {
         let info = core.info().await;
         let (can_upgrade, remote_length) = {
@@ -367,7 +370,7 @@ mod handlers {
     // TODO problem here when index >= length
     // this will request the data but the it might not have the length yet
     // what does js do here?
-    #[instrument(skip(core, channel))]
+    #[instrument(skip(core, peer_state, channel))]
     pub async fn get(
         core: impl ReplicationMethods,
         mut channel: Channel,
@@ -398,7 +401,7 @@ async fn on_peer(core: SharedCore, mut channel: Channel) -> Result<(), Replicato
 
     initiate_sync(core.clone(), peer_state.clone(), &mut channel).await?;
 
-    let _core_event_loop = spawn(core_message_loop(
+    let _core_event_loop = spawn(core_event_loop(
         core.clone(),
         peer_state.clone(),
         channel.clone(),
