@@ -1,4 +1,6 @@
 //! Bitfield datastructure
+
+use std::collections::BTreeSet;
 pub trait Bitfield {
     /// Get the value at `index`
     fn get(&self, index: u64) -> bool;
@@ -8,56 +10,49 @@ pub trait Bitfield {
     fn set_range(&mut self, index: u64, length: u64, value: bool);
 }
 
-pub struct DumbestBitfield {
-    data: Vec<bool>,
+#[derive(Debug, Clone)]
+pub struct DumbBitfield {
+    data: BTreeSet<u64>,
 }
 
-fn u64_to_usize_fixme(x: u64) -> usize {
-    usize::try_from(x).expect("TODO")
-}
-
-impl DumbestBitfield {
+impl DumbBitfield {
     pub fn new() -> Self {
-        Self { data: vec![] }
-    }
-
-    fn maybe_extend(&mut self, to_length: u64, value: bool) {
-        let to_length = u64_to_usize_fixme(to_length);
-        if self.data.len() <= to_length {
-            self.data.extend(&vec![value; to_length - len + 1]);
+        Self {
+            data: BTreeSet::new(),
         }
     }
 }
 
-impl Bitfield for DumbestBitfield {
+impl Bitfield for DumbBitfield {
     fn get(&self, index: u64) -> bool {
-        self.data
-            .get(u64_to_usize_fixme(index))
-            .cloned()
-            .unwrap_or(false)
+        self.data.get(&index).is_some()
     }
 
     fn set(&mut self, index: u64, value: bool) {
-        self.maybe_extend(index, false);
-        let index = u64_to_usize_fixme(index);
-        self.data[index] = value;
+        match value {
+            true => {
+                self.data.insert(index);
+            }
+            false => {
+                self.data.remove(&index);
+            }
+        };
     }
 
     fn set_range(&mut self, index: u64, length: u64, value: bool) {
-        self.maybe_extend(index, false);
-        let index = u64_to_usize_fixme(index);
-        let length = u64_to_usize_fixme(length);
-        (&mut self.data[index..(index + length)]).fill(value)
+        for i in index..(index + length) {
+            self.set(i, value)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{Bitfield, DumbestBitfield};
+    use crate::{Bitfield, DumbBitfield};
 
     #[test]
     fn bf() {
-        let mut x = DumbestBitfield::new();
+        let mut x = DumbBitfield::new();
         for i in 0..20 {
             assert!(!x.get(i));
         }
