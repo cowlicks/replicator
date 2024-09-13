@@ -593,6 +593,14 @@ async fn on_message_inner(
             };
         }
 
+        Message::Range(Range { start, length, .. }) => {
+            peer_state
+                .write()
+                .await
+                .remote_bitfield
+                .set_range(start, length, true);
+        }
+
         _ => {}
     }
     Ok(())
