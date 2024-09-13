@@ -21,9 +21,11 @@ use std::{fmt::Debug, marker::Unpin, sync::Arc};
 use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
 
 use thiserror::Error;
-use tracing::{debug, error, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use tokio::{spawn, sync::RwLock, task::JoinHandle};
+
+use bitfield::{Bitfield, DumbBitfield};
 
 use hypercore::{
     replication::{
@@ -384,15 +386,33 @@ mod handlers {
     #[instrument(skip(core, peer_state, channel))]
     pub async fn get(
         core: impl ReplicationMethods,
+        peer_state: ShareRw<PeerState>,
         mut channel: Channel,
         index: u64,
     ) -> Result<(), ReplicatorError> {
+        let ps_len = peer_state.read().await.remote_length;
+        if ps_len <= index {
+            debug!(
+                "peer to short for the block we want:
+peer_state.remote_length == {ps_len} < {index}"
+            );
+            return Ok(());
+        }
+
+        if !peer_state.read().await.remote_bitfield.get(index) {
+            let name = reader_or_writer!(core);
+            let name = format!("{name}:{}", channel.name);
+            debug!(
+                "{name}:\npeer does not have the block we want:
+peer_state.remote_bitfield({index}) == false"
+            );
+            return Ok(());
+        }
         let block = RequestBlock {
             index,
             nodes: core.missing_nodes(index).await?,
         };
-        let name = reader_or_writer!(core);
-        debug!("{name} sending request");
+
         let msg = Message::Request(Request {
             fork: core.info().await.fork,
             id: block.index + 1,
@@ -490,8 +510,6 @@ async fn on_message_inner(
                 // and peer's length has changed
                 && peer_length_changed
             {
-                let name = reader_or_writer!(core);
-                debug!("{name} sending request");
                 let msg = Request {
                     id: 1, // There should be proper handling for in-flight request ids
                     fork: info.fork,
