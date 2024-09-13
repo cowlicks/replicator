@@ -260,6 +260,13 @@ impl CoreMethods for ReplicatingCore {
     ) -> impl Future<Output = Result<hypercore::AppendOutcome, CoreMethodsError>> + Send {
         self.core.append(data)
     }
+
+    fn append_batch<A: AsRef<[u8]>, B: AsRef<[A]> + Send>(
+        &self,
+        batch: B,
+    ) -> impl Future<Output = Result<hypercore::AppendOutcome, CoreMethodsError>> + Send {
+        self.core.append_batch(batch)
+    }
 }
 
 async fn initiate_sync(
