@@ -614,6 +614,7 @@ struct PeerState {
     remote_fork: u64,
     /// how long the peer said it's core was
     remote_length: u64,
+    remote_bitfield: DumbBitfield,
     remote_can_upgrade: bool,
     remote_uploading: bool,
     remote_downloading: bool,
@@ -627,6 +628,7 @@ impl Default for PeerState {
             can_upgrade: true,
             remote_fork: 0,
             remote_length: 0,
+            remote_bitfield: DumbBitfield::new(),
             remote_can_upgrade: false,
             remote_uploading: true,
             remote_downloading: true,
