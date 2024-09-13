@@ -243,6 +243,10 @@ impl CoreInfo for ReplicatingCore {
     }
 }
 impl CoreMethods for ReplicatingCore {
+    fn has(&self, index: u64) -> impl Future<Output = bool> + Send {
+        self.core.has(index)
+    }
+
     fn get(
         &self,
         index: u64,
