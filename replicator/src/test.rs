@@ -21,27 +21,6 @@ macro_rules! wait {
     };
 }
 
-macro_rules! pause {
-    () => {
-        use std::io::Write;
-        use tokio::io::AsyncBufReadExt;
-        let mut input = String::new();
-        let msg = format!(
-            "[ {} ] -- {} | Press Enter to continue...",
-            line!(),
-            file!()
-        );
-        println!("{msg}");
-        spawn(async move {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            println!("{msg}");
-        });
-        std::io::stdout().flush().unwrap(); // Ensure the prompt is printed before waiting
-        let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
-        reader.read_line(&mut input).await?;
-    };
-}
-
 #[tokio::test]
 /// works but not the same as js
 async fn one_block_before_get() -> Result<(), ReplicatorError> {
@@ -183,39 +162,6 @@ async fn one_to_many_topology() -> Result<(), ReplicatorError> {
         for data_i in data.iter().cloned() {
             let expected = &[data_i as u8];
             assert_core_get!(core, data_i, expected);
-        }
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn qq_after_connect_path_topo() -> Result<(), ReplicatorError> {
-    let n_peers = 5;
-
-    let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
-        .build()
-        .await?
-        .into();
-
-    let mut data = vec![];
-    let mut cores = vec![master.clone()];
-    for data_i in n_peers..(n_peers * 2) {
-        let last = cores.last().unwrap();
-        let new_peer = make_connected_slave(last, false).await?;
-        cores.push(new_peer);
-    }
-
-    for i in (n_peers * 2)..(n_peers * 3) {
-        master.append(&[i as u8]).await?;
-        data.push(i);
-    }
-
-    log();
-    for (peer_i, core) in cores.iter().enumerate() {
-        for (index, data_val) in data.iter().enumerate() {
-            let expected = &[*data_val as u8];
-            assert_core_get!(core, index as u64, expected);
         }
     }
 
