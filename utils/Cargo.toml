@@ -12,6 +12,6 @@ random-access-memory = "3.0.0"
 tokio = { version = "1.37.0", features = ["sync"] }
 
 [dependencies.hypercore]
-#path = "../core"
+#path = "../../core"
 git = "https://github.com/cowlicks/hypercore.git"
-rev = "38251fea433b188f23b404a4ebda069d489e2b21"
+rev = "29f0a199861d06dee701413f473a43acbcfdff4f"
