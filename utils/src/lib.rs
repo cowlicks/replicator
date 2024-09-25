@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    OnceLock,
+};
 
 use hypercore::{
     generate_signing_key, replication::SharedCore, HypercoreBuilder, PartialKeypair, Storage,
@@ -83,4 +86,29 @@ impl Default for Rand {
             ordering: Ordering::SeqCst,
         }
     }
+}
+
+fn log() {
+    static START_LOGS: OnceLock<()> = OnceLock::new();
+    START_LOGS.get_or_init(|| {
+        tracing_subscriber::fmt()
+            .with_line_number(true)
+            .without_time()
+            // Reads `RUST_LOG` environment variable
+            .with_env_filter(EnvFilter::from_default_env())
+            .init();
+    });
+}
+
+fn exit_on_thread_panic() {
+    static EXIT_ON_THREAD_PANIC: OnceLock<()> = OnceLock::new();
+    EXIT_ON_THREAD_PANIC.get_or_init(|| {
+        // take_hook() returns the default hook in case when a custom one is not set
+        let orig_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |panic_info| {
+            // invoke the default handler and exit the process
+            orig_hook(panic_info);
+            std::process::exit(1);
+        }));
+    });
 }

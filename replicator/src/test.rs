@@ -128,7 +128,6 @@ macro_rules! assert_core_get {
 /// We check that every peer can get every piece of data
 /// All check appends, peer-adding, and core.get calls are done serially
 async fn one_to_many_topology() -> Result<(), ReplicatorError> {
-    log();
     let n_peers = 5;
 
     let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
@@ -215,7 +214,6 @@ async fn path_topology() -> Result<(), ReplicatorError> {
 
 #[tokio::test]
 async fn path_topo_only_initial_data() -> Result<(), ReplicatorError> {
-    log();
     let n_peers = 5;
 
     let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
