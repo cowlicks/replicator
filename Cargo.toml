@@ -1,6 +1,9 @@
 [workspace]
 
-members = [ "macros",
- "replicator", "utils",
+members = [
+ "bitfield",
+ "macros",
+ "replicator",
+ "utils",
 ]
 resolver = "2"
