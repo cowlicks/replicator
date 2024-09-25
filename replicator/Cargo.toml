@@ -11,28 +11,32 @@ futures-lite = "2.3.0"
 random-access-storage = "5.0.0"
 tracing = "0.1.40"
 thiserror = "1.0.50"
-tokio = { version = "1.37.0", features = ["sync", "time"] }
+# TODO FIXME dont use "full"
+#tokio = { version = "1.37.0", features = ["sync", "time"] }
+tokio = { version = "1.37.0", features = ["full"] }
 async-channel = "1"
 async-trait = "0.1.81"
 piper = { version = "0.2.1", optional = true }
 derive_builder = "0.20.0"
 
+[dependencies.bitfield]
+path = "../bitfield"
+
 [dependencies.hypercore]
-#path = "../core"
+#path = "../../core"
 git = "https://github.com/cowlicks/hypercore.git"
-rev = "38251fea433b188f23b404a4ebda069d489e2b21"
+rev = "29f0a199861d06dee701413f473a43acbcfdff4f"
 
 [dependencies.hypercore-protocol]
 #path = "../../protocol"
 git  = "https://github.com/cowlicks/hypercore-protocol-rs.git"
-rev = "0eb6baf6dd09c1e50a4ec174250ef4022e4f3dbe"
+rev = "03d47cbfddda5107b20356b58324789bc8b2f7af"
 
 [dev-dependencies]
 async-process = "2.2.1"
 piper = "0.2.1"
 serde_json = "1.0.116"
 tempfile = "3.10.1"
-tokio = {version = "1.37.0", features = ["rt", "macros", "sync", "net"] }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 utils = { path = "../utils" }
 macros = { path = "../macros" }
