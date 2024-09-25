@@ -188,24 +188,32 @@ async fn path_topology() -> Result<(), ReplicatorError> {
     }
 
     let mut cores = vec![master.clone()];
-    for data_i in n_peers..(n_peers * 2) {
+    for i in 0..n_peers {
+        println!("adding peer # [{i}]");
         let last = cores.last().unwrap();
         let new_peer = make_connected_slave(last, false).await?;
         cores.push(new_peer);
-        master.append(&[data_i as u8]).await?;
-        data.push(data_i);
-    }
-
-    for i in (n_peers * 2)..(n_peers * 3) {
         master.append(&[i as u8]).await?;
         data.push(i);
     }
 
-    log();
+    for i in 0..n_peers {
+        println!("appending data # [{i}]");
+        master.append(&[i as u8]).await?;
+        data.push(i);
+    }
+
     for (peer_i, core) in cores.iter().enumerate() {
-        for data_i in data.iter().cloned() {
-            let expected = &[data_i as u8];
-            assert_core_get!(core, data_i, expected);
+        if peer_i == 0 {
+            continue;
+        }
+
+        println!("checking data for peer: # [{peer_i}");
+        for (index, data_i) in data.iter().enumerate() {
+            println!("peer # [{peer_i}] GET block #[{index}]. should have data [{data_i}]");
+            let expected = &[*data_i as u8];
+            assert_core_get!(core, index as u64, expected);
+            println!("GOT peer # [{peer_i}] block #[{index}]. should have data [{data_i}]");
         }
     }
 
@@ -246,27 +254,38 @@ async fn path_topo_only_initial_data() -> Result<(), ReplicatorError> {
     Ok(())
 }
 
-fn log() {
-    static START_LOGS: OnceLock<()> = OnceLock::new();
-    START_LOGS.get_or_init(|| {
-        tracing_subscriber::fmt()
-            .with_line_number(true)
-            .without_time()
-            // Reads `RUST_LOG` environment variable
-            .with_env_filter(EnvFilter::from_default_env())
-            .init();
-    });
-}
+#[tokio::test]
+async fn after_connect_path_topo() -> Result<(), ReplicatorError> {
+    let n_peers = 3;
 
-fn exit_on_thread_panic() {
-    static EXIT_ON_THREAD_PANIC: OnceLock<()> = OnceLock::new();
-    EXIT_ON_THREAD_PANIC.get_or_init(|| {
-        // take_hook() returns the default hook in case when a custom one is not set
-        let orig_hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |panic_info| {
-            // invoke the default handler and exit the process
-            orig_hook(panic_info);
-            std::process::exit(1);
-        }));
-    });
+    let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
+        .build()
+        .await?
+        .into();
+
+    let mut data = vec![];
+    let mut cores = vec![master.clone()];
+    for data_i in 0..3 {
+        let last = cores.last().unwrap();
+        let new_peer = make_connected_slave(last, false).await?;
+        cores.push(new_peer);
+    }
+
+    for i in 0..2 {
+        master.append(&[i as u8]).await?;
+        data.push(i);
+    }
+
+    for (peer_i, core) in cores.iter().enumerate() {
+        if peer_i == 0 {
+            continue;
+        }
+        for (index, data_val) in data.iter().enumerate() {
+            info!("peer_i ={} AND index = {}", peer_i, index);
+            let expected = &[*data_val as u8];
+            assert_core_get!(core, index as u64, expected);
+        }
+    }
+
+    Ok(())
 }
