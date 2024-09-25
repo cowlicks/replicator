@@ -3,34 +3,42 @@ mod common;
 use std::time::Duration;
 
 use hypercore::{
-    replication::{CoreMethods, SharedCore},
+    replication::{CoreInfo, CoreMethods},
     PartialKeypair, VerifyingKey,
 };
 use macros::start_func_with;
 use tokio::{net::TcpListener, spawn};
+use tokio_util::compat::TokioAsyncReadCompatExt;
 use utils::ram_core;
 
 use rusty_nodejs_repl::{Config, Repl};
 
 use common::{
     js::{path_to_node_modules, require_js_data},
-    run_replicate, serialize_public_key, Result, LOOPBACK,
+    serialize_public_key, Result, LOOPBACK,
 };
-use replicator::utils::make_reader_and_writer_keys;
+use replicator::{utils::make_reader_and_writer_keys, ReplicatingCore};
 
 async fn rust_writer_js_reader<A: AsRef<[u8]>, B: AsRef<[A]>>(
     batch: B,
-) -> Result<(SharedCore, Repl)> {
+) -> Result<(ReplicatingCore, Repl)> {
     let (rkey, wkey) = make_reader_and_writer_keys();
-    let core = ram_core(Some(&wkey)).await;
+    let core: ReplicatingCore = ram_core(Some(&wkey)).await.into();
 
     let listener = TcpListener::bind(format!("{}:0", LOOPBACK)).await?;
     let port = format!("{}", listener.local_addr()?.port());
     let hostname = LOOPBACK;
 
-    let server_core = core.clone();
-    let _server = spawn(async move { run_replicate(listener, server_core, false).await.unwrap() });
-    core.0.lock().await.append_batch(batch).await?;
+    let replicating_core = core.clone();
+    spawn(async move {
+        let stream = listener.accept().await?.0;
+        replicating_core.add_stream(stream.compat(), false).await;
+        Ok::<(), std::io::Error>(())
+    });
+
+    for b in batch.as_ref().iter() {
+        core.append(b.as_ref()).await?;
+    }
 
     let mut conf = Config::build()?;
     conf.imports.push(
@@ -65,7 +73,7 @@ await core.update({{wait: true}});
     Ok((core, conf.start()?))
 }
 
-async fn setup_js_writer_rust_reader() -> Result<(SharedCore, Repl)> {
+async fn setup_js_writer_rust_reader() -> Result<(ReplicatingCore, Repl)> {
     let listener = TcpListener::bind(format!("{}:0", LOOPBACK)).await?;
 
     let mut conf = Config::build()?;
@@ -108,17 +116,18 @@ socket.pipe(core.replicate(false)).pipe(socket);
         .as_slice()
         .try_into()?;
 
-    let core = ram_core(Some(&PartialKeypair {
+    let core: ReplicatingCore = ram_core(Some(&PartialKeypair {
         public: VerifyingKey::from_bytes(&key)?,
         secret: None,
     }))
-    .await;
+    .await
+    .into();
 
-    let repl_core = core.clone();
-    let _server = spawn(async move {
-        run_replicate(listener, repl_core.clone(), true)
-            .await
-            .unwrap()
+    let replicating_core = core.clone();
+    spawn(async move {
+        let stream = listener.accept().await?.0;
+        replicating_core.add_stream(stream.compat(), true).await;
+        Ok::<(), std::io::Error>(())
     });
 
     repl.run("await core.ready();").await?;
@@ -200,6 +209,61 @@ process.stdout.write(String((await core.info()).length));",
 #[start_func_with(require_js_data()?;)]
 #[tokio::test]
 async fn js_writer_replicates_to_rust_reader() -> Result<()> {
+    let (core, mut repl) = setup_js_writer_rust_reader().await?;
+
+    for i in 0..10 {
+        repl.run(&format!("await core.append(Buffer.from([{i}]));"))
+            .await?;
+        loop {
+            // this does not work without thin check to info..
+            if let Some(x) = core.get(i).await? {
+                assert_eq!(x, vec![i as u8]);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+    Ok(())
+}
+
+async fn make_js_slave_from_rs(
+    core: ReplicatingCore,
+    js_core_name: &str,
+    repl: &mut Repl,
+) -> Result<()> {
+    let listener = TcpListener::bind(format!("{}:0", LOOPBACK)).await?;
+    let port = format!("{}", listener.local_addr()?.port());
+    let hostname = LOOPBACK;
+
+    let replicating_core = core.clone();
+    spawn(async move {
+        let stream = listener.accept().await?.0;
+        replicating_core.add_stream(stream.compat(), false).await;
+        Ok::<(), std::io::Error>(())
+    });
+    let k = core.key_pair().await;
+
+    repl.run(&format!(
+        "
+{js_core_name} = (async () => {{
+    const key = '{}';
+    const core = new Hypercore(RAM, key);
+    await core.ready();
+    const socket = net.connect('{port}', '{hostname}');
+    socket.pipe(core.replicate(true)).pipe(socket);
+    await core.update({{wait: true}});
+    return core;
+}})();
+",
+        serialize_public_key(&k),
+    ))
+    .await?;
+    Ok(())
+}
+
+#[start_func_with(require_js_data()?;)]
+#[tokio::test]
+async fn new_js_slave() -> Result<()> {
     let (core, mut repl) = setup_js_writer_rust_reader().await?;
 
     for i in 0..10 {
