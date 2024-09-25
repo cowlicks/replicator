@@ -78,7 +78,12 @@ async fn one_before_one_after_get() -> Result<(), ReplicatorError> {
 #[tokio::test]
 async fn append_many_foreach_reader_update_reader_get() -> Result<(), ReplicatorError> {
     let data: Vec<Vec<u8>> = (0..10).map(|x| vec![x as u8]).collect();
-    let ((writer_core, _), (reader_core, _)) = create_connected_cores(vec![] as Vec<&[u8]>).await;
+    let writer_core: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
+        .build()
+        .await?
+        .into();
+    let reader_core = make_connected_slave(&writer_core, false).await?;
+
     for (i, val) in data.iter().enumerate() {
         // add new data to writer
         writer_core.append(val).await?;
@@ -205,6 +210,7 @@ async fn path_topology() -> Result<(), ReplicatorError> {
 
     for (peer_i, core) in cores.iter().enumerate() {
         if peer_i == 0 {
+            // skip master
             continue;
         }
 
