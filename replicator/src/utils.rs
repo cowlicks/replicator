@@ -11,11 +11,11 @@ static PIPE_CAPACITY: usize = 1024 * 1024 * 4;
 
 pub async fn public_key(core: &impl CoreMethods) -> PartialKeypair {
     let PartialKeypair { public, .. } = core.key_pair().await;
-    let key = PartialKeypair {
+    
+    PartialKeypair {
         public,
         secret: None,
-    };
-    key
+    }
 }
 
 pub fn make_reader_and_writer_keys() -> (PartialKeypair, PartialKeypair) {

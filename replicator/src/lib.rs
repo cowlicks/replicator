@@ -21,7 +21,7 @@ use std::{fmt::Debug, marker::Unpin, sync::Arc};
 use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
 
 use thiserror::Error;
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, error, instrument, trace, warn};
 
 use tokio::{spawn, sync::RwLock, task::JoinHandle};
 
