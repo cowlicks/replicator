@@ -1,9 +1,9 @@
 #![allow(unused_variables)]
+#![allow(edition_2024_expr_fragment_specifier)]
 use std::time::Duration;
 
 use hypercore::{HypercoreBuilder, Storage};
-use std::sync::OnceLock;
-use tracing_subscriber::EnvFilter;
+use tracing::info;
 
 use crate::{
     utils::{create_connected_cores, make_connected_slave},

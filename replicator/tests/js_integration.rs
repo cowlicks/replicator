@@ -226,6 +226,8 @@ async fn js_writer_replicates_to_rust_reader() -> Result<()> {
     Ok(())
 }
 
+// TODO finish this to replace other replication setup code
+#[allow(unused)]
 async fn make_js_slave_from_rs(
     core: ReplicatingCore,
     js_core_name: &str,

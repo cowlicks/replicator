@@ -5,11 +5,8 @@ use std::{
 };
 
 use async_process::Stdio;
-use hypercore::{replication::SharedCore, PartialKeypair};
-use replicator::{Replicate, ReplicatorError};
+use hypercore::PartialKeypair;
 use tempfile::TempDir;
-use tokio::net::TcpListener;
-use tokio_util::compat::TokioAsyncReadCompatExt;
 
 pub mod js;
 
@@ -132,15 +129,4 @@ pub static LOOPBACK: &str = "127.0.0.1";
 
 pub fn serialize_public_key(key: &PartialKeypair) -> String {
     data_encoding::HEXLOWER.encode(key.public.as_bytes())
-}
-
-pub async fn run_replicate(
-    listener: TcpListener,
-    core: SharedCore,
-    is_initiator: bool,
-) -> std::result::Result<(), ReplicatorError> {
-    let (stream, _addr) = listener.accept().await?;
-    let replicator = core.replicate();
-    replicator.add_stream(stream.compat(), is_initiator).await;
-    Ok(())
 }

@@ -88,6 +88,7 @@ impl Default for Rand {
     }
 }
 
+#[allow(unused)]
 fn log() {
     static START_LOGS: OnceLock<()> = OnceLock::new();
     START_LOGS.get_or_init(|| {
@@ -100,6 +101,7 @@ fn log() {
     });
 }
 
+#[allow(unused)]
 fn exit_on_thread_panic() {
     static EXIT_ON_THREAD_PANIC: OnceLock<()> = OnceLock::new();
     EXIT_ON_THREAD_PANIC.get_or_init(|| {
