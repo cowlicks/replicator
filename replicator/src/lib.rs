@@ -1,49 +1,50 @@
-//! trait for replication
+//! Implement replication for Hypercores.
+//!
+//! The [`hypercore`] crate exposes a the [`CoreMethods`] trait, which contains methods for reading
+//! and writing to a [`Hypercore`]. We use this trait for things we want to treat like hypercores,
+//! but aren't, like a `Arc<Mutex<Hypercore>>`. We implement [`CoreMethods`] on [`Replicator`]
+//! to provide a thing that replicates and can still be treated like a [`Hypercore`].
+//!
+//! The [`Replicate`] trait defines a method that returns the [`Replicator`] struct that implements
+//! [`CoreMethods`].
+//!
+
+#![warn(missing_debug_implementations, rust_2024_compatibility)]
 #[cfg(test)]
 mod test;
 
-use std::{fmt::Debug, marker::Unpin};
+#[cfg(any(test, feature = "utils"))]
+pub mod utils;
 
-use async_channel::Receiver;
-use async_std::{
-    sync::{Arc, Mutex, RwLock},
-    task::{spawn, JoinHandle},
-};
+use std::{fmt::Debug, marker::Unpin, sync::Arc};
+
 use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
 
 use thiserror::Error;
-use tracing::{error, trace, warn};
+use tracing::{debug, error, instrument, trace, warn};
 
-use hypercore::{Hypercore, HypercoreError, RequestBlock, RequestUpgrade};
+use tokio::{spawn, sync::RwLock, task::JoinHandle};
+
+use bitfield::{Bitfield, DumbBitfield};
+
+use hypercore::{
+    replication::{
+        CoreInfo, CoreMethods, CoreMethodsError, ReplicationMethods, ReplicationMethodsError,
+        SharedCore,
+    },
+    Hypercore, HypercoreError, RequestBlock, RequestUpgrade,
+};
 use hypercore_protocol::{
     discovery_key,
     schema::{Data, Range, Request, Synchronize},
     Channel, Event, Key, Message, Protocol, ProtocolBuilder,
 };
 
-trait StreamTraits: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static {}
-impl<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static> StreamTraits for S {}
-
 type ShareRw<T> = Arc<RwLock<T>>;
-type SharedCore = Arc<Mutex<Hypercore>>;
-
-#[macro_export]
-macro_rules! lk {
-    ($core:tt) => {
-        $core.lock().await
-    };
-}
-
-#[macro_export]
-macro_rules! r {
-    ($core:tt) => {
-        $core.read().await
-    };
-}
 
 macro_rules! reader_or_writer {
     ($core:ident) => {
-        if is_writer($core.clone()).await {
+        if $core.key_pair().await.secret.is_some() {
             "Writer"
         } else {
             "Reader"
@@ -51,46 +52,50 @@ macro_rules! reader_or_writer {
     };
 }
 
-async fn is_writer(c: SharedCore) -> bool {
-    lk!(c).key_pair().secret.is_some()
-}
-
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum ReplicatorError {
-    #[error("There was an error in the opening the protocol in handshake")]
-    // TODO add key and show it
+    #[error("There was an error in the opening the protocol in handshake: [{0}]")]
     IoError(#[from] std::io::Error),
-    #[error("TODO")]
-    // TODO add error and show it
+    #[error("HypercoreError: [{0}]")]
     HypercoreError(#[from] HypercoreError),
+    #[error("ReplMethodsError: [{0}]")]
+    ReplMethodsError(#[from] ReplicationMethodsError),
+    #[error("CoreMethodsError: [{0}]")]
+    CoreMethodsError(#[from] CoreMethodsError),
 }
 
+/// Enables hypercore replication
+/// TODO have this return trait instead of a struct
+/// maybe rename `Replicate` -> `Replicatable`, and have `Replicatable.replicate() -> impl Replicator`
+/// like how JS has [`Iterables` and
+/// `Iterators`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Iterators_and_generators#iterables).
+///
+/// trait Replicator: CoreMethods { .. }
+///
+/// trait Replicatable {
+///     fn replicate() -> Replicator
+/// }
 pub trait Replicate {
-    fn replicate(&self) -> impl Future<Output = Result<HcReplicator, ReplicatorError>> + Send;
+    fn replicate(&self) -> ReplicatingCore;
 }
 
 impl Replicate for SharedCore {
-    fn replicate(&self) -> impl Future<Output = Result<HcReplicator, ReplicatorError>> + Send {
-        let core = self.clone();
-        async move { Ok(HcReplicator::new(core)) }
+    fn replicate(&self) -> ReplicatingCore {
+        ReplicatingCore::new(self.clone())
     }
 }
 
 #[async_trait::async_trait]
 trait ProtoMethods: Debug + Send + Sync {
     async fn open(&mut self, key: Key) -> std::io::Result<()>;
-    fn receiver_for_all_channel_messages(&self) -> Receiver<Message>;
     async fn _next(&mut self) -> Option<std::io::Result<Event>>;
 }
 
 #[async_trait::async_trait]
-impl<S: StreamTraits> ProtoMethods for Protocol<S> {
+impl<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static> ProtoMethods for Protocol<S> {
     async fn open(&mut self, key: Key) -> std::io::Result<()> {
         Protocol::open(self, key).await
-    }
-    fn receiver_for_all_channel_messages(&self) -> Receiver<Message> {
-        Protocol::receiver_for_all_channel_messages(self)
     }
     async fn _next(&mut self) -> Option<std::io::Result<Event>> {
         futures_lite::StreamExt::next(&mut self).await
@@ -98,9 +103,10 @@ impl<S: StreamTraits> ProtoMethods for Protocol<S> {
 }
 
 pub struct Peer {
+    /// reference to the parent core
     core: SharedCore,
+    /// stream of events to the peer
     protocol: ShareRw<Box<dyn ProtoMethods>>,
-    message_buff: ShareRw<Vec<Message>>,
 }
 
 impl Debug for Peer {
@@ -108,36 +114,18 @@ impl Debug for Peer {
         f.debug_struct("Peer")
             //.field("core", &self.core)
             //.field("protocol", &self.protocol)
-            .field("message_buff", &self.message_buff)
+            //.field("message_buff", &self.message_buff)
             .finish()
     }
 }
 
 impl Peer {
     fn new(core: SharedCore, protocol: ShareRw<Box<dyn ProtoMethods>>) -> Self {
-        Self {
-            core,
-            protocol,
-            message_buff: Arc::new(RwLock::new(vec![])),
-        }
-    }
-
-    async fn listen_to_channel_messages(&self) {
-        let receiver = self
-            .protocol
-            .read()
-            .await
-            .receiver_for_all_channel_messages();
-        let message_buff = self.message_buff.clone();
-        spawn(async move {
-            while let Ok(msg) = receiver.recv().await {
-                message_buff.write().await.push(msg);
-            }
-        });
+        Self { core, protocol }
     }
 
     async fn start_message_loop(&self, is_initiator: bool) -> Result<(), ReplicatorError> {
-        let key = self.core.lock().await.key_pair().public.to_bytes();
+        let key = self.core.key_pair().await.public.to_bytes();
         let this_dkey = discovery_key(&key);
         let core = self.core.clone();
         let name = reader_or_writer!(core);
@@ -164,7 +152,7 @@ impl Peer {
                 }
                 Event::Channel(channel) => {
                     if this_dkey == *channel.discovery_key() {
-                        onpeer(core.clone(), channel).await?;
+                        on_peer(core.clone(), channel).await?;
                     } else {
                         error!("Wrong discovery key?");
                     }
@@ -177,25 +165,53 @@ impl Peer {
     }
 }
 
-pub struct HcReplicator {
-    core: SharedCore,
-    peers: Vec<ShareRw<Peer>>,
+#[derive(Debug, Clone)]
+pub struct Peers(ShareRw<Vec<ShareRw<Peer>>>);
+
+impl Peers {
+    fn new() -> Self {
+        Self(Arc::new(RwLock::new(vec![])))
+    }
+    pub async fn push(&self, peer: ShareRw<Peer>) {
+        self.0.write().await.push(peer);
+    }
+    pub async fn get(&self, i: usize) -> ShareRw<Peer> {
+        self.0.read().await[i].clone()
+    }
 }
 
-impl HcReplicator {
+#[derive(Debug, Clone)]
+pub struct ReplicatingCore {
+    core: SharedCore,
+    peers: Peers,
+}
+
+impl From<Hypercore> for ReplicatingCore {
+    fn from(core: Hypercore) -> Self {
+        let sc: SharedCore = core.into();
+        ReplicatingCore::new(sc)
+    }
+}
+
+impl From<SharedCore> for ReplicatingCore {
+    fn from(core: SharedCore) -> Self {
+        ReplicatingCore::new(core)
+    }
+}
+
+impl ReplicatingCore {
     pub fn new(core: SharedCore) -> Self {
         Self {
             core,
-            peers: vec![],
+            peers: Peers::new(),
         }
     }
 
-    #[allow(private_bounds)]
-    pub async fn add_peer<S: StreamTraits>(
-        &mut self,
+    async fn add_peer<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static>(
+        &self,
         stream: S,
         is_initiator: bool,
-    ) -> Result<ShareRw<Peer>, ReplicatorError> {
+    ) -> ShareRw<Peer> {
         let core = self.core.clone();
         let protocol = ProtocolBuilder::new(is_initiator).connect(stream);
 
@@ -203,32 +219,64 @@ impl HcReplicator {
             core,
             Arc::new(RwLock::new(Box::new(protocol))),
         )));
-        self.peers.push(peer.clone());
-        Ok(peer)
+        self.peers.push(peer.clone()).await;
+        peer
     }
 
-    #[allow(private_bounds)]
-    pub async fn add_stream<S: StreamTraits>(
-        &mut self,
+    pub async fn add_stream<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static>(
+        &self,
         stream: S,
         is_initiator: bool,
-    ) -> Result<(), ReplicatorError> {
-        let peer = self.add_peer(stream, is_initiator).await?;
-        peer.read().await.listen_to_channel_messages().await;
+    ) {
+        let peer = self.add_peer(stream, is_initiator).await;
         spawn(async move {
             peer.read().await.start_message_loop(is_initiator).await?;
             Ok::<(), ReplicatorError>(())
         });
-        Ok(())
     }
 }
+
+impl CoreInfo for ReplicatingCore {
+    fn info(&self) -> impl Future<Output = hypercore::Info> + Send {
+        self.core.info()
+    }
+    fn key_pair(&self) -> impl Future<Output = hypercore::PartialKeypair> + Send {
+        self.core.key_pair()
+    }
+}
+impl CoreMethods for ReplicatingCore {
+    fn has(&self, index: u64) -> impl Future<Output = bool> + Send {
+        self.core.has(index)
+    }
+
+    fn get(
+        &self,
+        index: u64,
+    ) -> impl Future<Output = Result<Option<Vec<u8>>, CoreMethodsError>> + Send {
+        self.core.get(index)
+    }
+
+    fn append(
+        &self,
+        data: &[u8],
+    ) -> impl Future<Output = Result<hypercore::AppendOutcome, CoreMethodsError>> + Send {
+        self.core.append(data)
+    }
+
+    fn append_batch<A: AsRef<[u8]>, B: AsRef<[A]> + Send>(
+        &self,
+        batch: B,
+    ) -> impl Future<Output = Result<hypercore::AppendOutcome, CoreMethodsError>> + Send {
+        self.core.append_batch(batch)
+    }
+}
+
 async fn initiate_sync(
-    core: SharedCore,
+    core: impl ReplicationMethods + Clone + 'static,
     peer_state: ShareRw<PeerState>,
     channel: &mut Channel,
 ) -> Result<(), ReplicatorError> {
-    let name = reader_or_writer!(core);
-    let info = lk!(core).info();
+    let info = core.info().await;
     if info.fork != peer_state.read().await.remote_fork {
         peer_state.write().await.can_upgrade = false;
     }
@@ -238,111 +286,174 @@ async fn initiate_sync(
         0
     };
 
-    let sync_msg = Synchronize {
+    let mut out = vec![];
+
+    out.push(Message::Synchronize(Synchronize {
         fork: info.fork,
         length: info.length,
         remote_length,
         can_upgrade: peer_state.read().await.can_upgrade,
         uploading: true,
         downloading: true,
-    };
+    }));
 
     if info.contiguous_length > 0 {
-        let range_msg = Range {
+        out.push(Message::Range(Range {
             drop: false,
             start: 0,
             length: info.contiguous_length,
-        };
-        trace!("\n\t{name} Channel TX:[\n\t{sync_msg:#?},\n\t{range_msg:#?}\n])");
-        channel
-            .send_batch(&[Message::Synchronize(sync_msg), Message::Range(range_msg)])
-            .await?;
-    } else {
-        trace!("\n\t{name} Channel TX:\n\t{sync_msg:#?})");
-        channel.send(Message::Synchronize(sync_msg)).await?;
+        }));
     }
+    channel.send_batch(&out).await?;
     Ok(())
 }
 
 async fn core_event_loop(
-    core: SharedCore,
+    core: impl ReplicationMethods + Clone + 'static,
     peer_state: ShareRw<PeerState>,
-    mut channel: Channel,
-) -> Result<(), ReplicatorError> {
-    let mut on_upgrade = core.lock().await.on_upgrade();
-    while let Ok(_event) = on_upgrade.recv().await {
-        trace!("got core upgrade event. Notifying peers");
-        initiate_sync(core.clone(), peer_state.clone(), &mut channel).await?
-    }
-    Ok(())
-}
-
-async fn on_get_loop(core: SharedCore, channel: Channel) -> Result<(), ReplicatorError> {
-    let mut on_get_events = core.lock().await.on_get_subscribe();
-    while let Ok((index, _tx)) = on_get_events.recv().await {
-        trace!("got core upgrade event. Notifying peers");
-        on_get(core.clone(), channel.clone(), index);
-    }
-    Ok(())
-}
-fn on_get(
-    core: SharedCore,
     channel: Channel,
-    index: u64,
-) -> JoinHandle<Result<(), ReplicatorError>> {
-    spawn(on_get_inner(core, channel, index))
-}
-async fn on_get_inner(
-    core: SharedCore,
-    mut channel: Channel,
-    index: u64,
 ) -> Result<(), ReplicatorError> {
-    let block = RequestBlock {
-        index,
-        nodes: core.lock().await.missing_nodes(index).await?,
-    };
-    let msg = Message::Request(Request {
-        fork: core.lock().await.info().fork,
-        id: block.index + 1,
-        block: Some(block),
-        hash: None,
-        seek: None,
-        upgrade: None,
-    });
+    use hypercore::replication::Event::*;
 
-    channel.send_batch(&[msg]).await?;
+    let mut events = core.event_subscribe().await;
+    while let Ok(event) = events.recv().await {
+        match event {
+            Get(evt) => {
+                _ = spawn(handlers::get(
+                    core.clone(),
+                    peer_state.clone(),
+                    channel.clone(),
+                    evt.index,
+                ));
+            }
+            Have(evt) => {
+                _ = spawn(handlers::have(channel.clone(), evt));
+            }
+            DataUpgrade(evt) => {
+                let _ = spawn(handlers::data_upgrade(
+                    core.clone(),
+                    peer_state.clone(),
+                    channel.clone(),
+                    evt,
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
-pub async fn onpeer(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
+mod handlers {
+    use hypercore::replication::events::{DataUpgrade, Have};
+
+    use super::*;
+    pub async fn have(mut channel: Channel, event: Have) -> Result<(), ReplicatorError> {
+        channel
+            .send(Message::Range(Range {
+                drop: event.drop,
+                start: event.start,
+                length: event.length,
+            }))
+            .await?;
+        Ok(())
+    }
+    pub async fn data_upgrade(
+        core: impl ReplicationMethods + Clone + 'static,
+        peer_state: ShareRw<PeerState>,
+        mut channel: Channel,
+        _event: DataUpgrade,
+    ) -> Result<(), ReplicatorError> {
+        let info = core.info().await;
+        let (can_upgrade, remote_length) = {
+            let ps = peer_state.read().await;
+            (ps.can_upgrade, ps.remote_length)
+        };
+        channel
+            .send(Message::Synchronize(Synchronize {
+                fork: info.fork,
+                length: info.length,
+                remote_length,
+                downloading: true,
+                uploading: true,
+                can_upgrade,
+            }))
+            .await?;
+        Ok(())
+    }
+
+    // TODO problem here when index >= length
+    // this will request the data but the it might not have the length yet
+    // what does js do here?
+    #[instrument(skip(core, peer_state, channel))]
+    pub async fn get(
+        core: impl ReplicationMethods,
+        peer_state: ShareRw<PeerState>,
+        mut channel: Channel,
+        index: u64,
+    ) -> Result<(), ReplicatorError> {
+        let ps_len = peer_state.read().await.remote_length;
+        if ps_len <= index {
+            debug!(
+                "peer to short for the block we want:
+peer_state.remote_length == {ps_len} < {index}"
+            );
+            return Ok(());
+        }
+
+        if !peer_state.read().await.remote_bitfield.get(index) {
+            let name = reader_or_writer!(core);
+            let name = format!("{name}:{}", channel.name);
+            debug!(
+                "{name}:\npeer does not have the block we want:
+peer_state.remote_bitfield({index}) == false"
+            );
+            return Ok(());
+        }
+        let block = RequestBlock {
+            index,
+            nodes: core.missing_nodes(index).await?,
+        };
+
+        let msg = Message::Request(Request {
+            fork: core.info().await.fork,
+            id: block.index + 1,
+            block: Some(block),
+            hash: None,
+            seek: None,
+            upgrade: None,
+        });
+
+        channel.send_batch(&[msg]).await?;
+        Ok(())
+    }
+}
+
+async fn on_peer(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
     let peer_state = Arc::new(RwLock::new(PeerState::default()));
 
     initiate_sync(core.clone(), peer_state.clone(), &mut channel).await?;
 
-    let _event_loop = spawn(core_event_loop(
+    let _core_event_loop = spawn(core_event_loop(
         core.clone(),
         peer_state.clone(),
         channel.clone(),
     ));
 
-    let _on_get_loop = spawn(on_get_loop(core.clone(), channel.clone()));
-
     let _channel_rx_loop = spawn(async move {
         while let Some(message) = channel.next().await {
-            onmessage(core.clone(), peer_state.clone(), channel.clone(), message);
+            on_message(core.clone(), peer_state.clone(), channel.clone(), message);
         }
     });
     Ok(())
 }
 
-fn onmessage(
+fn on_message(
     core: SharedCore,
     peer_state: ShareRw<PeerState>,
     channel: Channel,
     message: Message,
 ) -> JoinHandle<Result<(), ReplicatorError>> {
     spawn(async move {
-        if let Err(e) = onmessage_inner(core, peer_state, channel, message).await {
+        if let Err(e) = on_message_inner(core, peer_state, channel, message).await {
             error!("Error handling message: {e}");
             return Err(e);
         }
@@ -350,19 +461,19 @@ fn onmessage(
     })
 }
 
-async fn onmessage_inner(
-    core: SharedCore,
+async fn on_message_inner(
+    core: impl ReplicationMethods,
     peer_state: ShareRw<PeerState>,
     mut channel: Channel,
     message: Message,
 ) -> Result<(), ReplicatorError> {
     let name = reader_or_writer!(core);
-    trace!("{name} onmessage {}", message.kind());
+    trace!("{name}:{}:RX {}", channel.name, message.kind());
     match message {
         Message::Synchronize(message) => {
-            let peer_length_changed = message.length != r!(peer_state).remote_length;
-            let first_sync = !r!(peer_state).remote_synced;
-            let info = lk!(core).info();
+            let peer_length_changed = message.length != peer_state.read().await.remote_length;
+            let first_sync = !peer_state.read().await.remote_synced;
+            let info = core.info().await;
             let same_fork = message.fork == info.fork;
 
             {
@@ -376,6 +487,7 @@ async fn onmessage_inner(
 
                 ps.length_acked = if same_fork { message.remote_length } else { 0 };
             }
+
             let mut messages = vec![];
 
             if first_sync {
@@ -383,8 +495,8 @@ async fn onmessage_inner(
                 let msg = Synchronize {
                     fork: info.fork,
                     length: info.length,
-                    remote_length: r!(peer_state).remote_length,
-                    can_upgrade: r!(peer_state).can_upgrade,
+                    remote_length: peer_state.read().await.remote_length,
+                    can_upgrade: peer_state.read().await.can_upgrade,
                     uploading: true,
                     downloading: true,
                 };
@@ -392,9 +504,9 @@ async fn onmessage_inner(
             }
 
             // if peer is longer than us
-            if r!(peer_state).remote_length > info.length
+            if peer_state.read().await.remote_length > info.length
                 // and peer knows our correct length
-                && r!(peer_state).length_acked == info.length
+                && peer_state.read().await.length_acked == info.length
                 // and peer's length has changed
                 && peer_length_changed
             {
@@ -406,27 +518,23 @@ async fn onmessage_inner(
                     seek: None,
                     upgrade: Some(RequestUpgrade {
                         start: info.length,
-                        length: r!(peer_state).remote_length - info.length,
+                        length: peer_state.read().await.remote_length - info.length,
                     }),
                 };
 
                 messages.push(Message::Request(msg));
             }
-            trace!("\n\t{name} Channel TX:\n\t{messages:#?}");
             if !messages.is_empty() {
                 channel.send_batch(&messages).await?;
             }
         }
 
         Message::Request(message) => {
-            trace!("Got Request message {message:?}");
             let (info, proof) = {
-                let proof = lk!(core)
+                let proof = core
                     .create_proof(message.block, message.hash, message.seek, message.upgrade)
-                    .await
-                    .unwrap();
-                //TODO .await?;
-                (lk!(core).info(), proof)
+                    .await?;
+                (core.info().await, proof)
             };
 
             if let Some(proof) = proof {
@@ -443,19 +551,18 @@ async fn onmessage_inner(
         }
 
         Message::Data(message) => {
-            trace!("Got Data message Data {{...}}");
-            let (_old_info, _applied, new_info, request_block) = {
-                let old_info = lk!(core).info();
+            let (_old_info, _applied, _new_info, _request_block) = {
+                let old_info = core.info().await;
 
                 let proof = message.clone().into_proof();
-                let applied = lk!(core).verify_and_apply_proof(&proof).await?;
-                let new_info = lk!(core).info();
+                let applied = core.verify_and_apply_proof(&proof).await?;
+                let new_info = core.info().await;
 
                 let request_block: Option<RequestBlock> = if let Some(upgrade) = &message.upgrade {
                     // When getting the initial upgrade, send a request for the first missing block
                     if old_info.length < upgrade.length {
                         let request_index = old_info.length;
-                        let nodes = lk!(core).missing_nodes(request_index).await?;
+                        let nodes = core.missing_nodes(request_index).await?;
                         Some(RequestBlock {
                             index: request_index,
                             nodes,
@@ -465,9 +572,9 @@ async fn onmessage_inner(
                     }
                 } else if let Some(block) = &message.block {
                     // When receiving a block, ask for the next, if there are still some missing
-                    if block.index < r!(peer_state).remote_length - 1 {
+                    if block.index < peer_state.read().await.remote_length - 1 {
                         let request_index = block.index + 1;
-                        let nodes = lk!(core).missing_nodes(request_index).await?;
+                        let nodes = core.missing_nodes(request_index).await?;
                         Some(RequestBlock {
                             index: request_index,
                             nodes,
@@ -479,43 +586,19 @@ async fn onmessage_inner(
                     None
                 };
 
-                // If all have been replicated, print the result
                 if new_info.contiguous_length == new_info.length {
                     trace!("All data replicated. length = {}", new_info.length);
                 }
                 (old_info, applied, new_info, request_block)
             };
+        }
 
-            let mut messages: Vec<Message> = vec![];
-
-            // If we got an upgrade send a Sync
-            if message.upgrade.is_some() {
-                let remote_length = if new_info.fork == r!(peer_state).remote_fork {
-                    r!(peer_state).remote_length
-                } else {
-                    0
-                };
-                messages.push(Message::Synchronize(Synchronize {
-                    fork: new_info.fork,
-                    length: new_info.length,
-                    remote_length,
-                    can_upgrade: false,
-                    uploading: true,
-                    downloading: true,
-                }));
-            }
-            if let Some(request_block) = request_block {
-                messages.push(Message::Request(Request {
-                    id: request_block.index + 1,
-                    fork: new_info.fork,
-                    hash: None,
-                    block: Some(request_block),
-                    seek: None,
-                    upgrade: None,
-                }));
-            }
-            trace!("\n\t{name} Channel TX:\n\t{messages:#?}");
-            channel.send_batch(&messages).await.unwrap();
+        Message::Range(Range { start, length, .. }) => {
+            peer_state
+                .write()
+                .await
+                .remote_bitfield
+                .set_range(start, length, true);
         }
 
         _ => {}
@@ -531,6 +614,7 @@ struct PeerState {
     remote_fork: u64,
     /// how long the peer said it's core was
     remote_length: u64,
+    remote_bitfield: DumbBitfield,
     remote_can_upgrade: bool,
     remote_uploading: bool,
     remote_downloading: bool,
@@ -544,6 +628,7 @@ impl Default for PeerState {
             can_upgrade: true,
             remote_fork: 0,
             remote_length: 0,
+            remote_bitfield: DumbBitfield::new(),
             remote_can_upgrade: false,
             remote_uploading: true,
             remote_downloading: true,

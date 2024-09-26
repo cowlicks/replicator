@@ -1,4 +1,3 @@
-// cargo thinks everything in here is unused even though it is used in the integration tests
 use std::{
     fs::File,
     io::Write,
@@ -6,12 +5,8 @@ use std::{
 };
 
 use async_process::Stdio;
-use async_std::net::TcpListener;
-use futures_lite::StreamExt;
 use hypercore::PartialKeypair;
-use replicator::{Replicate, ReplicatorError};
 use tempfile::TempDir;
-use utils::SharedCore;
 
 pub mod js;
 
@@ -134,18 +129,4 @@ pub static LOOPBACK: &str = "127.0.0.1";
 
 pub fn serialize_public_key(key: &PartialKeypair) -> String {
     data_encoding::HEXLOWER.encode(key.public.as_bytes())
-}
-
-pub async fn run_replicate(
-    listener: TcpListener,
-    core: SharedCore,
-    is_initiator: bool,
-) -> std::result::Result<(), ReplicatorError> {
-    let mut incoming = listener.incoming();
-    let Some(Ok(stream)) = incoming.next().await else {
-        panic!("No connections");
-    };
-
-    let mut replicator = core.replicate().await?;
-    replicator.add_stream(stream, is_initiator).await
 }

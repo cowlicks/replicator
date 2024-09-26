@@ -1,9 +1,11 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    OnceLock,
+};
 
-use async_std::sync::{Arc, Mutex};
-use hypercore::{generate_signing_key, Hypercore, HypercoreBuilder, PartialKeypair, Storage};
-
-pub type SharedCore = Arc<Mutex<Hypercore>>;
+use hypercore::{
+    generate_signing_key, replication::SharedCore, HypercoreBuilder, PartialKeypair, Storage,
+};
 
 pub fn make_reader_and_writer_keys() -> (PartialKeypair, PartialKeypair) {
     let signing_key = generate_signing_key();
@@ -22,7 +24,7 @@ pub async fn ram_core(key: Option<&PartialKeypair>) -> SharedCore {
         Some(key) => builder.key_pair(key.clone()),
         None => builder,
     };
-    Arc::new(Mutex::new(builder.build().await.unwrap()))
+    builder.build().await.unwrap().into()
 }
 
 static INIT_LOG: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
@@ -39,6 +41,13 @@ pub async fn setup_logs() {
                 .init();
         })
         .await;
+}
+
+use tracing_subscriber::EnvFilter;
+pub fn init_env_logs() {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env()) // Reads `RUST_LOG` environment variable
+        .init();
 }
 
 /// Seedable deterministic pseudorandom number generator used for reproducible randomized testing
@@ -77,4 +86,31 @@ impl Default for Rand {
             ordering: Ordering::SeqCst,
         }
     }
+}
+
+#[allow(unused)]
+fn log() {
+    static START_LOGS: OnceLock<()> = OnceLock::new();
+    START_LOGS.get_or_init(|| {
+        tracing_subscriber::fmt()
+            .with_line_number(true)
+            .without_time()
+            // Reads `RUST_LOG` environment variable
+            .with_env_filter(EnvFilter::from_default_env())
+            .init();
+    });
+}
+
+#[allow(unused)]
+fn exit_on_thread_panic() {
+    static EXIT_ON_THREAD_PANIC: OnceLock<()> = OnceLock::new();
+    EXIT_ON_THREAD_PANIC.get_or_init(|| {
+        // take_hook() returns the default hook in case when a custom one is not set
+        let orig_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |panic_info| {
+            // invoke the default handler and exit the process
+            orig_hook(panic_info);
+            std::process::exit(1);
+        }));
+    });
 }

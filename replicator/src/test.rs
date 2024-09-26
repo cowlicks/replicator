@@ -1,131 +1,36 @@
-// TODO in several tests we use a loop where we run: core.get(i)
-// Then `pause().await` for a time fater if we don't have the block.
-// This loop is where we wait for the core to get updated.
-// However,  if we pause for too short a time, then we never receive the block.
-// Why? I should understand and/or fix this.
-// In this loop, where there is the `.get(i)`, the reader requests the data
-// then writer responds with the data,
-// but the reader does not receive this message
-use async_std::task::sleep;
-use hypercore_protocol::{schema::Synchronize, Duplex, Message};
-use piper::pipe;
+#![allow(unused_variables)]
+#![allow(edition_2024_expr_fragment_specifier)]
 use std::time::Duration;
 
-use hypercore::{generate_signing_key, HypercoreBuilder, PartialKeypair, Storage};
+use hypercore::{HypercoreBuilder, Storage};
+use tracing::info;
 
-use super::*;
+use crate::{
+    utils::{create_connected_cores, make_connected_slave},
+    *,
+};
 
-static PIPE_CAPACITY: usize = 1024 * 1024 * 4;
+const DEFAULT_MILLIS: u64 = 100;
 
 macro_rules! wait {
+    ($millis:expr) => {
+        tokio::time::sleep(Duration::from_millis($millis)).await;
+    };
     () => {
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        wait!(DEFAULT_MILLIS)
     };
-}
-
-async fn get_messages(rep: &HcReplicator) -> Vec<Message> {
-    let peer = rep.peers[0].read().await;
-    let out = peer.message_buff.read().await.iter().cloned().collect();
-    out
-}
-
-fn make_reader_and_writer_keys() -> (PartialKeypair, PartialKeypair) {
-    let signing_key = generate_signing_key();
-    let writer_key = PartialKeypair {
-        public: signing_key.verifying_key(),
-        secret: Some(signing_key),
-    };
-    let mut reader_key = writer_key.clone();
-    reader_key.secret = None;
-    (reader_key, writer_key)
-}
-
-async fn create_connected_cores<A: AsRef<[u8]>, B: AsRef<[A]>>(
-    initial_data: B,
-) -> Result<((SharedCore, HcReplicator), (SharedCore, HcReplicator)), ReplicatorError> {
-    let (reader_key, writer_key) = make_reader_and_writer_keys();
-    let writer_core = Arc::new(Mutex::new(
-        HypercoreBuilder::new(Storage::new_memory().await.unwrap())
-            .key_pair(writer_key)
-            .build()
-            .await
-            .unwrap(),
-    ));
-
-    // add data
-    lk!(writer_core).append_batch(initial_data).await.unwrap();
-
-    let reader_core = Arc::new(Mutex::new(
-        HypercoreBuilder::new(Storage::new_memory().await.unwrap())
-            .key_pair(reader_key)
-            .build()
-            .await
-            .unwrap(),
-    ));
-
-    let (read_from_writer, write_to_writer) = pipe(PIPE_CAPACITY);
-    let (read_from_reader, write_to_reader) = pipe(PIPE_CAPACITY);
-
-    let stream_to_reader = Duplex::new(read_from_writer, write_to_reader);
-    let stream_to_writer = Duplex::new(read_from_reader, write_to_writer);
-
-    let mut server_replicator = writer_core.clone().replicate().await?;
-    let mut client_replicator = reader_core.clone().replicate().await?;
-
-    assert_eq!(
-        writer_core.lock().await.key_pair().public,
-        reader_core.lock().await.key_pair().public
-    );
-
-    server_replicator.add_stream(stream_to_writer, true).await?;
-    client_replicator
-        .add_stream(stream_to_reader, false)
-        .await?;
-
-    Ok((
-        (writer_core, server_replicator),
-        (reader_core, client_replicator),
-    ))
-}
-
-#[tokio::test]
-/// This is **not** the same as js. Both the reader and writer send an extra Sync message.
-/// Seemingly as a reply to the first received one. But it works.
-async fn initial_sync() -> Result<(), ReplicatorError> {
-    let ((_wcore, wrep), (_rcore, rrep)) = create_connected_cores(vec![] as Vec<&[u8]>).await?;
-
-    loop {
-        if get_messages(&wrep).await.len() >= 2 && get_messages(&rrep).await.len() >= 2 {
-            break;
-        }
-        wait!();
-    }
-    let sync_msg = Message::Synchronize(Synchronize {
-        fork: 0,
-        length: 0,
-        remote_length: 0,
-        downloading: true,
-        uploading: true,
-        can_upgrade: true,
-    });
-    let expected = vec![sync_msg.clone(), sync_msg.clone()];
-    let msgs = get_messages(&wrep).await;
-    assert_eq!(msgs, expected);
-    let msgs = get_messages(&rrep).await;
-    assert_eq!(msgs, expected);
-    Ok(())
 }
 
 #[tokio::test]
 /// works but not the same as js
 async fn one_block_before_get() -> Result<(), ReplicatorError> {
     let batch: &[&[u8]] = &[b"0"];
-    let ((_, writer_replicator), (reader_core, _reader_replicator)) =
-        create_connected_cores(batch).await?;
+    let ((_, _writer_replicator), (reader_core, _reader_replicator)) =
+        create_connected_cores(batch).await;
     for (i, expected_block) in batch.iter().enumerate() {
         loop {
-            if lk!(reader_core).info().length as usize > i {
-                if let Some(block) = lk!(reader_core).get(i as u64).await? {
+            if reader_core.info().await.length as usize > i {
+                if let Some(block) = reader_core.get(i as u64).await? {
                     if block == *expected_block {
                         break;
                     }
@@ -134,38 +39,33 @@ async fn one_block_before_get() -> Result<(), ReplicatorError> {
             wait!();
         }
     }
-    let peer = &writer_replicator.peers[0].read().await;
-    let _ = peer.message_buff.read().await;
-
-    let peer = &_reader_replicator.peers[0].read().await;
-    let _ = peer.message_buff.read().await;
-    assert_eq!(reader_core.lock().await.get(0).await?, Some(b"0".to_vec()));
+    assert_eq!(reader_core.get(0).await?, Some(b"0".to_vec()));
     Ok(())
 }
 
 #[tokio::test]
 async fn one_block_after_might_lock() -> Result<(), ReplicatorError> {
-    let ((writer_core, _), (reader_core, _)) = create_connected_cores(vec![] as Vec<&[u8]>).await?;
-    writer_core.lock().await.append(b"0").await?;
+    let ((writer_core, _), (reader_core, _)) = create_connected_cores(vec![] as Vec<&[u8]>).await;
+    writer_core.append(b"0").await?;
     loop {
-        if let Some(block) = reader_core.lock().await.get(0_u64).await? {
+        if let Some(block) = reader_core.get(0_u64).await? {
             assert_eq!(block, b"0");
             break;
         }
         wait!();
     }
-    assert_eq!(reader_core.lock().await.get(0).await?, Some(b"0".to_vec()));
+    assert_eq!(reader_core.get(0).await?, Some(b"0".to_vec()));
     Ok(())
 }
 
 #[tokio::test]
 async fn one_before_one_after_get() -> Result<(), ReplicatorError> {
     let batch: &[&[u8]] = &[&[0]];
-    let ((writer_core, _), (reader_core, _)) = create_connected_cores(batch).await?;
-    writer_core.lock().await.append(&[1]).await?;
+    let ((writer_core, _), (reader_core, _)) = create_connected_cores(batch).await;
+    writer_core.append(&[1]).await?;
     for i in 0..=1 {
         loop {
-            if let Some(block) = reader_core.lock().await.get(i as u64).await? {
+            if let Some(block) = reader_core.get(i as u64).await? {
                 assert_eq!(block, vec![i as u8]);
                 break;
             }
@@ -178,20 +78,25 @@ async fn one_before_one_after_get() -> Result<(), ReplicatorError> {
 #[tokio::test]
 async fn append_many_foreach_reader_update_reader_get() -> Result<(), ReplicatorError> {
     let data: Vec<Vec<u8>> = (0..10).map(|x| vec![x as u8]).collect();
-    let ((writer_core, _), (reader_core, _)) = create_connected_cores(vec![] as Vec<&[u8]>).await?;
+    let writer_core: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
+        .build()
+        .await?
+        .into();
+    let reader_core = make_connected_slave(&writer_core, false).await?;
+
     for (i, val) in data.iter().enumerate() {
         // add new data to writer
-        writer_core.lock().await.append(val).await?;
+        writer_core.append(val).await?;
 
         // wait for reader's length to update
-        while (lk!(reader_core).info().length as usize) != i + 1 {
+        while (reader_core.info().await.length as usize) != i + 1 {
             wait!();
         }
-        assert_eq!(reader_core.lock().await.info().length as usize, i + 1);
+        assert_eq!(reader_core.info().await.length as usize, i + 1);
 
         // wait for reader to `.get(i)`
         loop {
-            if let Some(block) = reader_core.lock().await.get(i as u64).await? {
+            if let Some(block) = reader_core.get(i as u64).await? {
                 if block == vec![i as u8] {
                     break;
                 }
@@ -199,5 +104,194 @@ async fn append_many_foreach_reader_update_reader_get() -> Result<(), Replicator
             wait!();
         }
     }
+    Ok(())
+}
+
+const MAX_LOOPS: usize = 10;
+macro_rules! assert_core_get {
+    ($core:tt, $block_index:expr, $expected:expr) => {
+        let mut i = 0;
+        loop {
+            if i >= MAX_LOOPS {
+                panic!("too many attempts getting data, expected: {:?}", $expected);
+            }
+            if let Some(x) = $core.get($block_index).await? {
+                assert_eq!(x, $expected);
+                break;
+            }
+            wait!(50);
+            println!("retry core.get({})", $block_index);
+            i += 1;
+        }
+    };
+}
+
+#[tokio::test]
+/// This tests buils a star-like topology where every peer connects to the master.
+/// Data is added in 3 parts: before peers, while peers are added, and after they are added.
+/// Each peer is the "initiator" (so master_is_initiator == false)
+/// We check that every peer can get every piece of data
+/// All check appends, peer-adding, and core.get calls are done serially
+async fn one_to_many_topology() -> Result<(), ReplicatorError> {
+    let n_peers = 5;
+
+    let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
+        .build()
+        .await?
+        .into();
+
+    // add initial data to master
+    let mut data = vec![];
+    for i in 0..n_peers {
+        master.append(&[i as u8]).await?;
+        data.push(i);
+    }
+
+    // add peers, add data each time we add peer
+    let mut cores = vec![master.clone()];
+    for i in n_peers..(n_peers * 2) {
+        cores.push(make_connected_slave(&master, false).await?);
+        master.append(&[i as u8]).await?;
+        data.push(i);
+    }
+
+    // add more data
+    for i in (n_peers * 2)..(n_peers * 3) {
+        master.append(&[i as u8]).await?;
+        data.push(i);
+    }
+
+    // check
+    for core in cores.iter() {
+        for data_i in data.iter().cloned() {
+            let expected = &[data_i as u8];
+            assert_core_get!(core, data_i, expected);
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+/// This tests buils a PATH-like topology where every peer connects to the last, in a line.
+/// Data is added in 3 parts: before peers, while peers are added, and after they are added.
+/// Each peer added peer is the "initiator"
+/// We check that every peer can get every piece of data
+/// All check appends, peer-adding, and core.get calls are done serially
+async fn path_topology() -> Result<(), ReplicatorError> {
+    let n_peers = 5;
+
+    let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
+        .build()
+        .await?
+        .into();
+
+    let mut data = vec![];
+    for i in 0..n_peers {
+        master.append(&[i as u8]).await?;
+        data.push(i);
+    }
+
+    let mut cores = vec![master.clone()];
+    for i in 0..n_peers {
+        println!("adding peer # [{i}]");
+        let last = cores.last().unwrap();
+        let new_peer = make_connected_slave(last, false).await?;
+        cores.push(new_peer);
+        master.append(&[i as u8]).await?;
+        data.push(i);
+    }
+
+    for i in 0..n_peers {
+        println!("appending data # [{i}]");
+        master.append(&[i as u8]).await?;
+        data.push(i);
+    }
+
+    for (peer_i, core) in cores.iter().enumerate() {
+        if peer_i == 0 {
+            // skip master
+            continue;
+        }
+
+        println!("checking data for peer: # [{peer_i}");
+        for (index, data_i) in data.iter().enumerate() {
+            println!("peer # [{peer_i}] GET block #[{index}]. should have data [{data_i}]");
+            let expected = &[*data_i as u8];
+            assert_core_get!(core, index as u64, expected);
+            println!("GOT peer # [{peer_i}] block #[{index}]. should have data [{data_i}]");
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn path_topo_only_initial_data() -> Result<(), ReplicatorError> {
+    let n_peers = 5;
+
+    let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
+        .build()
+        .await?
+        .into();
+
+    let mut data = vec![];
+    for i in 0..n_peers {
+        master.append(&[i as u8]).await?;
+        data.push(i);
+    }
+
+    let mut cores = vec![master.clone()];
+    for core_i in 0..n_peers {
+        let last = cores.last().unwrap();
+        let new_peer = make_connected_slave(last, false).await?;
+        // NB without this, later assert does not work
+        for data_i in 0..n_peers {
+            assert_core_get!(new_peer, data_i, &[data_i as u8]);
+        }
+        cores.push(new_peer);
+    }
+
+    for (core_i, core) in cores.iter().enumerate() {
+        for data_i in 0..n_peers {
+            assert_core_get!(core, data_i, &[data_i as u8]);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn after_connect_path_topo() -> Result<(), ReplicatorError> {
+    let n_peers = 3;
+
+    let master: ReplicatingCore = HypercoreBuilder::new(Storage::new_memory().await?)
+        .build()
+        .await?
+        .into();
+
+    let mut data = vec![];
+    let mut cores = vec![master.clone()];
+    for data_i in 0..3 {
+        let last = cores.last().unwrap();
+        let new_peer = make_connected_slave(last, false).await?;
+        cores.push(new_peer);
+    }
+
+    for i in 0..2 {
+        master.append(&[i as u8]).await?;
+        data.push(i);
+    }
+
+    for (peer_i, core) in cores.iter().enumerate() {
+        if peer_i == 0 {
+            continue;
+        }
+        for (index, data_val) in data.iter().enumerate() {
+            info!("peer_i ={} AND index = {}", peer_i, index);
+            let expected = &[*data_val as u8];
+            assert_core_get!(core, index as u64, expected);
+        }
+    }
+
     Ok(())
 }
