@@ -322,7 +322,7 @@ async fn core_event_loop(
                 _ = spawn(handlers::have(channel.clone(), evt));
             }
             DataUpgrade(evt) => {
-                spawn(handlers::data_upgrade(
+                let _ = spawn(handlers::data_upgrade(
                     core.clone(),
                     peer_state.clone(),
                     channel.clone(),

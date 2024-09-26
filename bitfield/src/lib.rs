@@ -15,12 +15,6 @@ pub struct DumbBitfield {
     data: BTreeSet<u64>,
 }
 
-impl Default for DumbBitfield {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl DumbBitfield {
     pub fn new() -> Self {
         Self {
