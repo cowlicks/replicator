@@ -65,17 +65,9 @@ pub enum ReplicatorError {
     CoreMethodsError(#[from] CoreMethodsError),
 }
 
+// TODO have this return trait instead of a struct
+// and maybe rename to replicatable (like how JS has "Iterables" that create "Iterator"s).
 /// Enables hypercore replication
-/// TODO have this return trait instead of a struct
-/// maybe rename `Replicate` -> `Replicatable`, and have `Replicatable.replicate() -> impl Replicator`
-/// like how JS has [`Iterables` and
-/// `Iterators`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Iterators_and_generators#iterables).
-///
-/// trait Replicator: CoreMethods { .. }
-///
-/// trait Replicatable {
-///     fn replicate() -> Replicator
-/// }
 pub trait Replicate {
     fn replicate(&self) -> ReplicatingCore;
 }
@@ -330,7 +322,7 @@ async fn core_event_loop(
                 _ = spawn(handlers::have(channel.clone(), evt));
             }
             DataUpgrade(evt) => {
-                let _ = spawn(handlers::data_upgrade(
+                spawn(handlers::data_upgrade(
                     core.clone(),
                     peer_state.clone(),
                     channel.clone(),
