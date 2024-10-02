@@ -15,6 +15,12 @@ pub struct DumbBitfield {
     data: BTreeSet<u64>,
 }
 
+impl Default for DumbBitfield {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DumbBitfield {
     pub fn new() -> Self {
         Self {
@@ -25,7 +31,7 @@ impl DumbBitfield {
 
 impl Bitfield for DumbBitfield {
     fn get(&self, index: u64) -> bool {
-        self.data.get(&index).is_some()
+        self.data.contains(&index)
     }
 
     fn set(&mut self, index: u64, value: bool) {
