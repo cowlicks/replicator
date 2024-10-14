@@ -128,7 +128,10 @@ impl Peer {
             let p = protocol.write().await._next().await;
             p
         } {
-            trace!("\n\t{name} Proto RX:\n\t{:#?}", event);
+            trace!(
+                "\n\t{name} [is_initiator = {is_initiator}] Proto RX:\n\t{:#?}",
+                event
+            );
             match event {
                 Event::Handshake(_m) => {
                     if is_initiator {
@@ -199,18 +202,12 @@ impl ReplicatingCore {
         }
     }
 
-    async fn add_peer<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static>(
+    pub async fn add_peer(
         &self,
-        stream: S,
-        is_initiator: bool,
+        core: SharedCore,
+        protocol: Arc<RwLock<Box<dyn ProtoMethods>>>,
     ) -> ShareRw<Peer> {
-        let core = self.core.clone();
-        let protocol = ProtocolBuilder::new(is_initiator).connect(stream);
-
-        let peer = Arc::new(RwLock::new(Peer::new(
-            core,
-            Arc::new(RwLock::new(Box::new(protocol))),
-        )));
+        let peer = Arc::new(RwLock::new(Peer::new(core, protocol)));
         self.peers.push(peer.clone()).await;
         peer
     }
@@ -220,7 +217,10 @@ impl ReplicatingCore {
         stream: S,
         is_initiator: bool,
     ) {
-        let peer = self.add_peer(stream, is_initiator).await;
+        let core = self.core.clone();
+        let protocol = ProtocolBuilder::new(is_initiator).connect(stream);
+        let protocol = Arc::new(RwLock::new(Box::new(protocol) as Box<dyn ProtoMethods>));
+        let peer = self.add_peer(core, protocol).await;
         spawn(async move {
             peer.read().await.start_message_loop(is_initiator).await?;
             Ok::<(), ReplicatorError>(())
@@ -419,7 +419,7 @@ peer_state.remote_bitfield({index}) == false"
     }
 }
 
-async fn on_peer(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
+pub async fn on_peer(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
     let peer_state = Arc::new(RwLock::new(PeerState::default()));
 
     initiate_sync(core.clone(), peer_state.clone(), &mut channel).await?;
