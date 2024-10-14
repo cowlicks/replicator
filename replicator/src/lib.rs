@@ -79,7 +79,8 @@ impl Replicate for SharedCore {
 }
 
 #[async_trait::async_trait]
-trait ProtoMethods: Debug + Send + Sync {
+/// TODO don't make this pub, just using in corestore
+pub trait ProtoMethods: Debug + Send + Sync {
     async fn open(&mut self, key: Key) -> std::io::Result<()>;
     async fn _next(&mut self) -> Option<std::io::Result<Event>>;
 }
@@ -177,7 +178,9 @@ impl Peers {
 
 #[derive(Debug, Clone)]
 pub struct ReplicatingCore {
-    core: SharedCore,
+    // TODO make not pub?
+    // used in corestore
+    pub core: SharedCore,
     peers: Peers,
 }
 
