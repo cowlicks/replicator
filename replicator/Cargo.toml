@@ -25,12 +25,16 @@ path = "../bitfield"
 [dependencies.hypercore]
 #path = "../../core"
 git = "https://github.com/cowlicks/hypercore.git"
-rev = "29f0a199861d06dee701413f473a43acbcfdff4f"
+branch = "replication"
+default-features = false
+features = ["sparse", "tokio"]
 
 [dependencies.hypercore-protocol]
 #path = "../../protocol"
 git  = "https://github.com/cowlicks/hypercore-protocol-rs.git"
-rev = "03d47cbfddda5107b20356b58324789bc8b2f7af"
+branch = "replication"
+default-features = false
+features = ["sparse", "tokio"]
 
 [dev-dependencies]
 async-process = "2.2.1"
