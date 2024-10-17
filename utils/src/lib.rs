@@ -89,7 +89,7 @@ impl Default for Rand {
 }
 
 #[allow(unused)]
-fn log() {
+pub fn log() {
     static START_LOGS: OnceLock<()> = OnceLock::new();
     START_LOGS.get_or_init(|| {
         tracing_subscriber::fmt()

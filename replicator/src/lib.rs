@@ -2,10 +2,10 @@
 //!
 //! The [`hypercore`] crate exposes a the [`CoreMethods`] trait, which contains methods for reading
 //! and writing to a [`Hypercore`]. We use this trait for things we want to treat like hypercores,
-//! but aren't, like a `Arc<Mutex<Hypercore>>`. We implement [`CoreMethods`] on [`Replicator`]
+//! but aren't, like a `Arc<Mutex<Hypercore>>`. We implement [`CoreMethods`] on [`ReplicatingCore`]
 //! to provide a thing that replicates and can still be treated like a [`Hypercore`].
 //!
-//! The [`Replicate`] trait defines a method that returns the [`Replicator`] struct that implements
+//! The [`Replicate`] trait defines a method that returns the [`ReplicatingCore`] struct that implements
 //! [`CoreMethods`].
 //!
 
@@ -79,7 +79,8 @@ impl Replicate for SharedCore {
 }
 
 #[async_trait::async_trait]
-trait ProtoMethods: Debug + Send + Sync {
+/// TODO don't make this pub, just using in corestore
+pub trait ProtoMethods: Debug + Send + Sync {
     async fn open(&mut self, key: Key) -> std::io::Result<()>;
     async fn _next(&mut self) -> Option<std::io::Result<Event>>;
 }
@@ -128,7 +129,10 @@ impl Peer {
             let p = protocol.write().await._next().await;
             p
         } {
-            trace!("\n\t{name} Proto RX:\n\t{:#?}", event);
+            trace!(
+                "\n\t{name} [is_initiator = {is_initiator}] Proto RX:\n\t{:#?}",
+                event
+            );
             match event {
                 Event::Handshake(_m) => {
                     if is_initiator {
@@ -174,7 +178,9 @@ impl Peers {
 
 #[derive(Debug, Clone)]
 pub struct ReplicatingCore {
-    core: SharedCore,
+    // TODO make not pub?
+    // used in corestore
+    pub core: SharedCore,
     peers: Peers,
 }
 
@@ -199,18 +205,12 @@ impl ReplicatingCore {
         }
     }
 
-    async fn add_peer<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static>(
+    pub async fn add_peer(
         &self,
-        stream: S,
-        is_initiator: bool,
+        core: SharedCore,
+        protocol: Arc<RwLock<Box<dyn ProtoMethods>>>,
     ) -> ShareRw<Peer> {
-        let core = self.core.clone();
-        let protocol = ProtocolBuilder::new(is_initiator).connect(stream);
-
-        let peer = Arc::new(RwLock::new(Peer::new(
-            core,
-            Arc::new(RwLock::new(Box::new(protocol))),
-        )));
+        let peer = Arc::new(RwLock::new(Peer::new(core, protocol)));
         self.peers.push(peer.clone()).await;
         peer
     }
@@ -220,7 +220,10 @@ impl ReplicatingCore {
         stream: S,
         is_initiator: bool,
     ) {
-        let peer = self.add_peer(stream, is_initiator).await;
+        let core = self.core.clone();
+        let protocol = ProtocolBuilder::new(is_initiator).connect(stream);
+        let protocol = Arc::new(RwLock::new(Box::new(protocol) as Box<dyn ProtoMethods>));
+        let peer = self.add_peer(core, protocol).await;
         spawn(async move {
             peer.read().await.start_message_loop(is_initiator).await?;
             Ok::<(), ReplicatorError>(())
@@ -419,7 +422,7 @@ peer_state.remote_bitfield({index}) == false"
     }
 }
 
-async fn on_peer(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
+pub async fn on_peer(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
     let peer_state = Arc::new(RwLock::new(PeerState::default()));
 
     initiate_sync(core.clone(), peer_state.clone(), &mut channel).await?;
