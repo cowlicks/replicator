@@ -2,10 +2,10 @@
 //!
 //! The [`hypercore`] crate exposes a the [`CoreMethods`] trait, which contains methods for reading
 //! and writing to a [`Hypercore`]. We use this trait for things we want to treat like hypercores,
-//! but aren't, like a `Arc<Mutex<Hypercore>>`. We implement [`CoreMethods`] on [`Replicator`]
+//! but aren't, like a `Arc<Mutex<Hypercore>>`. We implement [`CoreMethods`] on [`ReplicatingCore`]
 //! to provide a thing that replicates and can still be treated like a [`Hypercore`].
 //!
-//! The [`Replicate`] trait defines a method that returns the [`Replicator`] struct that implements
+//! The [`Replicate`] trait defines a method that returns the [`ReplicatingCore`] struct that implements
 //! [`CoreMethods`].
 //!
 
