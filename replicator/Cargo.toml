@@ -23,11 +23,11 @@ derive_builder = "0.20.0"
 path = "../bitfield"
 
 [dependencies.hypercore]
+features = ["sparse", "cache", "shared-core"]
+version = "0.14.0"
 #path = "../../core"
-git = "https://github.com/cowlicks/hypercore.git"
-branch = "replication"
-default-features = false
-features = ["sparse", "tokio"]
+#git = "https://github.com/cowlicks/hypercore.git"
+#branch = "replication"
 
 [dependencies.hypercore-protocol]
 #path = "../../protocol"
