@@ -10,6 +10,8 @@
 //!
 
 #![warn(missing_debug_implementations, rust_2024_compatibility)]
+#![deny(clippy::needless_pass_by_ref_mut)]
+
 #[cfg(test)]
 mod test;
 
