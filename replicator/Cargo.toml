@@ -26,15 +26,12 @@ path = "../bitfield"
 features = ["sparse", "cache", "shared-core"]
 version = "0.14.0"
 #path = "../../core"
-#git = "https://github.com/cowlicks/hypercore.git"
-#branch = "replication"
 
 [dependencies.hypercore-protocol]
-#path = "../../protocol"
-git  = "https://github.com/cowlicks/hypercore-protocol-rs.git"
-branch = "replication"
+version = "0.6.1"
 default-features = false
-features = ["sparse", "tokio"]
+features = ["sparse", "cache", "tokio"]
+#path = "../../protocol"
 
 [dev-dependencies]
 async-process = "2.2.1"
