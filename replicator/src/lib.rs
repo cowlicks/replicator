@@ -42,16 +42,6 @@ use hypercore_protocol::{
 
 type ShareRw<T> = Arc<RwLock<T>>;
 
-macro_rules! reader_or_writer {
-    ($core:ident) => {
-        if $core.key_pair().await.secret.is_some() {
-            "Writer"
-        } else {
-            "Reader"
-        }
-    };
-}
-
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum ReplicatorError {
@@ -121,7 +111,6 @@ impl Peer {
         let key = self.core.key_pair().await.public.to_bytes();
         let this_dkey = discovery_key(&key);
         let core = self.core.clone();
-        let name = reader_or_writer!(core);
         let protocol = self.protocol.clone();
         while let Some(Ok(event)) = {
             // this block is just here to release the `.write()` lock
@@ -129,10 +118,7 @@ impl Peer {
             let p = protocol.write().await._next().await;
             p
         } {
-            trace!(
-                "\n\t{name} [is_initiator = {is_initiator}] Proto RX:\n\t{:#?}",
-                event
-            );
+            trace!("[is_initiator = {is_initiator}] Proto RX:\n\t{:#?}", event);
             match event {
                 Event::Handshake(_m) => {
                     if is_initiator {
@@ -325,7 +311,7 @@ async fn core_event_loop(
                 _ = spawn(handlers::have(channel.clone(), evt));
             }
             DataUpgrade(evt) => {
-                let _ = spawn(handlers::data_upgrade(
+                _ = spawn(handlers::data_upgrade(
                     core.clone(),
                     peer_state.clone(),
                     channel.clone(),
@@ -395,10 +381,8 @@ peer_state.remote_length == {ps_len} < {index}"
         }
 
         if !peer_state.read().await.remote_bitfield.get(index) {
-            let name = reader_or_writer!(core);
-            let name = format!("{name}:{}", channel.name);
             debug!(
-                "{name}:\npeer does not have the block we want:
+                "peer does not have the block we want:
 peer_state.remote_bitfield({index}) == false"
             );
             return Ok(());
@@ -462,8 +446,7 @@ async fn on_message_inner(
     mut channel: Channel,
     message: Message,
 ) -> Result<(), ReplicatorError> {
-    let name = reader_or_writer!(core);
-    trace!("{name}:{}:RX {}", channel.name, message.kind());
+    trace!("RX:{:?}", message);
     match message {
         Message::Synchronize(message) => {
             let peer_length_changed = message.length != peer_state.read().await.remote_length;
