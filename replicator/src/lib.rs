@@ -9,7 +9,7 @@
 //! [`CoreMethods`].
 //!
 
-#![warn(missing_debug_implementations, rust_2024_compatibility)]
+#![warn(missing_debug_implementations)]
 #![deny(clippy::needless_pass_by_ref_mut)]
 
 #[cfg(test)]

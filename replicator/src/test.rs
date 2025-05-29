@@ -1,5 +1,4 @@
 #![allow(unused_variables)]
-#![allow(edition_2024_expr_fragment_specifier)]
 use std::time::Duration;
 
 use hypercore::{HypercoreBuilder, Storage};
