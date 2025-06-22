@@ -30,16 +30,15 @@ use tokio::{spawn, sync::RwLock, task::JoinHandle};
 use bitfield::{Bitfield, DumbBitfield};
 
 use hypercore::{
+    Hypercore, HypercoreError, RequestBlock, RequestUpgrade,
     replication::{
         CoreInfo, CoreMethods, CoreMethodsError, ReplicationMethods, ReplicationMethodsError,
         SharedCore,
     },
-    Hypercore, HypercoreError, RequestBlock, RequestUpgrade,
 };
 use hypercore_protocol::{
-    discovery_key,
+    Channel, Event, Key, Message, Protocol, ProtocolBuilder, discovery_key,
     schema::{Data, Range, Request, Synchronize},
-    Channel, Event, Key, Message, Protocol, ProtocolBuilder,
 };
 
 type ShareRw<T> = Arc<RwLock<T>>;
