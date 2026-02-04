@@ -1,23 +1,98 @@
 mod common;
 
-use std::time::Duration;
-
-use hypercore::{
-    replication::{CoreInfo, CoreMethods},
-    PartialKeypair, VerifyingKey,
+use std::{
+    io,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
 };
+
+use futures::{Sink, Stream};
+use hypercore::{
+    PartialKeypair, VerifyingKey,
+    replication::{CoreInfo, CoreMethods},
+};
+use hypercore_protocol::HandshakeResult;
 use macros::start_func_with;
 use tokio::{net::TcpListener, spawn};
 use tokio_util::compat::TokioAsyncReadCompatExt;
+use uint24le_framing::Uint24LELengthPrefixedFraming;
 use utils::ram_core;
 
 use rusty_nodejs_repl::{Config, Repl};
 
 use common::{
+    LOOPBACK, Result,
     js::{path_to_node_modules, require_js_data},
-    serialize_public_key, Result, LOOPBACK,
+    serialize_public_key,
 };
-use replicator::{utils::make_reader_and_writer_keys, ReplicatingCore};
+use replicator::{ReplicatingCore, utils::make_reader_and_writer_keys};
+
+/// Wrapper that adapts Uint24LELengthPrefixedFraming to the expected Stream/Sink types.
+/// The framer outputs Result<Vec<u8>> but Protocol expects Vec<u8>.
+struct FramedStream<IO> {
+    inner: Uint24LELengthPrefixedFraming<IO>,
+}
+
+impl<IO> FramedStream<IO>
+where
+    IO: futures_lite::AsyncRead + futures_lite::AsyncWrite + Send + Unpin + 'static,
+{
+    fn new(io: IO) -> Self {
+        Self {
+            inner: Uint24LELengthPrefixedFraming::new(io),
+        }
+    }
+}
+
+impl<IO> Stream for FramedStream<IO>
+where
+    IO: futures_lite::AsyncRead + futures_lite::AsyncWrite + Send + Unpin + 'static,
+{
+    type Item = Vec<u8>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let inner = &mut self.get_mut().inner;
+        match Pin::new(inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(data))) => Poll::Ready(Some(data)),
+            Poll::Ready(Some(Err(_))) => Poll::Ready(None),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<IO> Sink<Vec<u8>> for FramedStream<IO>
+where
+    IO: futures_lite::AsyncRead + futures_lite::AsyncWrite + Send + Unpin + 'static,
+{
+    type Error = io::Error;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_ready(cx)
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: Vec<u8>) -> io::Result<()> {
+        Pin::new(&mut self.get_mut().inner).start_send(item)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_close(cx)
+    }
+}
+
+fn test_handshake(is_initiator: bool) -> HandshakeResult {
+    let (local, remote) = if is_initiator {
+        ([0u8; 32], [1u8; 32])
+    } else {
+        ([1u8; 32], [0u8; 32])
+    };
+    HandshakeResult::from_pre_encrypted(is_initiator, local, remote, vec![0u8; 64])
+}
 
 async fn rust_writer_js_reader<A: AsRef<[u8]>, B: AsRef<[A]>>(
     batch: B,
@@ -32,7 +107,15 @@ async fn rust_writer_js_reader<A: AsRef<[u8]>, B: AsRef<[A]>>(
     let replicating_core = core.clone();
     spawn(async move {
         let stream = listener.accept().await?.0;
-        replicating_core.add_stream(stream.compat(), false).await;
+        dbg!();
+        replicating_core
+            .add_stream(
+                FramedStream::new(stream.compat()),
+                false,
+                test_handshake(false),
+            )
+            .await;
+        dbg!();
         Ok::<(), std::io::Error>(())
     });
 
@@ -126,7 +209,13 @@ socket.pipe(core.replicate(false)).pipe(socket);
     let replicating_core = core.clone();
     spawn(async move {
         let stream = listener.accept().await?.0;
-        replicating_core.add_stream(stream.compat(), true).await;
+        replicating_core
+            .add_stream(
+                FramedStream::new(stream.compat()),
+                true,
+                test_handshake(true),
+            )
+            .await;
         Ok::<(), std::io::Error>(())
     });
 
@@ -136,15 +225,18 @@ socket.pipe(core.replicate(false)).pipe(socket);
 
 #[start_func_with(require_js_data()?;)]
 #[tokio::test]
-async fn initial_rust_data_replicates_to_js() -> Result<()> {
+async fn initial_rust_data_replicates_to_js_foo() -> Result<()> {
     let batch: &[&[u8]] = &[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"];
 
+    dbg!();
     let (_core, mut repl) = rust_writer_js_reader(batch).await?;
     // print the length of the core so we can check it in rust
+    dbg!();
     let result = repl
         .run("process.stdout.write(String((await core.info()).length));")
         .await?;
 
+    dbg!();
     let expected: Vec<u8> = format!("{}", batch.len()).bytes().collect();
     assert_eq!(result, expected);
 
@@ -240,7 +332,13 @@ async fn make_js_slave_from_rs(
     let replicating_core = core.clone();
     spawn(async move {
         let stream = listener.accept().await?.0;
-        replicating_core.add_stream(stream.compat(), false).await;
+        replicating_core
+            .add_stream(
+                FramedStream::new(stream.compat()),
+                false,
+                test_handshake(false),
+            )
+            .await;
         Ok::<(), std::io::Error>(())
     });
     let k = core.key_pair().await;
