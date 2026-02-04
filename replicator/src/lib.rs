@@ -20,7 +20,8 @@ pub mod utils;
 
 use std::{fmt::Debug, marker::Unpin, sync::Arc};
 
-use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
+use futures::{Sink, Stream};
+use futures_lite::{Future, StreamExt};
 
 use thiserror::Error;
 use tracing::{debug, error, instrument, trace, warn};
@@ -37,7 +38,7 @@ use hypercore::{
     },
 };
 use hypercore_protocol::{
-    Channel, Event, Key, Message, Protocol, ProtocolBuilder, discovery_key,
+    Channel, Event, HandshakeResult, Key, Message, Protocol, discovery_key,
     schema::{Data, Range, Request, Synchronize},
 };
 
@@ -77,12 +78,16 @@ pub trait ProtoMethods: Debug + Send + Sync {
 }
 
 #[async_trait::async_trait]
-impl<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static> ProtoMethods for Protocol<S> {
+impl<S> ProtoMethods for Protocol<S>
+where
+    S: Stream<Item = Vec<u8>> + Sink<Vec<u8>> + Send + Sync + Unpin + 'static,
+    <S as Sink<Vec<u8>>>::Error: Into<std::io::Error>,
+{
     async fn open(&mut self, key: Key) -> std::io::Result<()> {
         Protocol::open(self, key).await
     }
     async fn _next(&mut self) -> Option<std::io::Result<Event>> {
-        futures_lite::StreamExt::next(&mut self).await
+        futures_lite::StreamExt::next(self).await
     }
 }
 
@@ -202,13 +207,17 @@ impl ReplicatingCore {
         peer
     }
 
-    pub async fn add_stream<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static>(
+    pub async fn add_stream<S>(
         &self,
         stream: S,
         is_initiator: bool,
-    ) {
+        handshake: HandshakeResult,
+    ) where
+        S: Stream<Item = Vec<u8>> + Sink<Vec<u8>> + Send + Sync + Unpin + 'static,
+        <S as Sink<Vec<u8>>>::Error: Into<std::io::Error>,
+    {
         let core = self.core.clone();
-        let protocol = ProtocolBuilder::new(is_initiator).connect(stream);
+        let protocol = Protocol::new(stream, is_initiator, handshake);
         let protocol = Arc::new(RwLock::new(Box::new(protocol) as Box<dyn ProtoMethods>));
         let peer = self.add_peer(core, protocol).await;
         spawn(async move {
@@ -400,6 +409,8 @@ peer_state.remote_bitfield({index}) == false"
             hash: None,
             seek: None,
             upgrade: None,
+            manifest: false,
+            priority: 0,
         });
 
         channel.send_batch(&[msg]).await?;
@@ -499,6 +510,8 @@ async fn on_message_inner(
                         start: info.length,
                         length: peer_state.read().await.remote_length - info.length,
                     }),
+                    manifest: false,
+                    priority: 0,
                 };
 
                 messages.push(Message::Request(msg));
