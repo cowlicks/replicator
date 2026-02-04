@@ -7,7 +7,6 @@ edition = "2024"
 utils = ["dep:piper"]
 
 [dependencies]
-futures = "0.3"
 futures-lite = "2.3.0"
 random-access-storage = "5.0.0"
 tracing = "0.1.40"
@@ -25,18 +24,17 @@ path = "../bitfield"
 
 [dependencies.hypercore]
 features = ["sparse", "cache", "shared-core"]
-version = "0.15.0"
+version = "0.14.0"
 #path = "../../core"
 
 [dependencies.hypercore-protocol]
-#version = "0.6.1"
+version = "0.6.1"
 default-features = false
 features = ["sparse", "cache", "tokio"]
-path = "../../protocol"
+#path = "../../protocol"
 
 [dev-dependencies]
 async-process = "2.2.1"
-uint24le_framing = { path = "../../framing" }
 piper = "0.2.1"
 serde_json = "1.0.116"
 tempfile = "3.10.1"
