@@ -3,8 +3,8 @@ mod common;
 use std::time::Duration;
 
 use hypercore::{
-    replication::{CoreInfo, CoreMethods},
     PartialKeypair, VerifyingKey,
+    replication::{CoreInfo, CoreMethods},
 };
 use macros::start_func_with;
 use tokio::{net::TcpListener, spawn};
@@ -14,10 +14,11 @@ use utils::ram_core;
 use rusty_nodejs_repl::{Config, Repl};
 
 use common::{
+    LOOPBACK, Result,
     js::{path_to_node_modules, require_js_data},
-    serialize_public_key, Result, LOOPBACK,
+    serialize_public_key,
 };
-use replicator::{utils::make_reader_and_writer_keys, ReplicatingCore};
+use replicator::{ReplicatingCore, utils::make_reader_and_writer_keys};
 
 async fn rust_writer_js_reader<A: AsRef<[u8]>, B: AsRef<[A]>>(
     batch: B,
@@ -70,7 +71,7 @@ await core.update({{wait: true}});
     conf.after.push("socket.destroy();".into());
     conf.path_to_node_modules = Some(path_to_node_modules()?.display().to_string());
 
-    Ok((core, conf.start()?))
+    Ok((core, conf.start().await?))
 }
 
 async fn setup_js_writer_rust_reader() -> Result<(ReplicatingCore, Repl)> {
@@ -104,12 +105,10 @@ socket.pipe(core.replicate(false)).pipe(socket);
     conf.after.push("socket.destroy();".into());
     conf.path_to_node_modules = Some(path_to_node_modules()?.display().to_string());
 
-    let mut repl = conf.start()?;
+    let mut repl = conf.start().await?;
 
     // get the public key from the JS core for the RS core
-    let key = repl
-        .run("process.stdout.write(core.key.toString('hex'))")
-        .await?;
+    let key = repl.run("output(core.key.toString('hex'))").await?;
 
     let key: [u8; 32] = data_encoding::HEXLOWER
         .decode(&key)?
@@ -142,23 +141,20 @@ async fn initial_rust_data_replicates_to_js() -> Result<()> {
     let (_core, mut repl) = rust_writer_js_reader(batch).await?;
     // print the length of the core so we can check it in rust
     let result = repl
-        .run("process.stdout.write(String((await core.info()).length));")
+        .run("output(String((await core.info()).length));")
         .await?;
 
     let expected: Vec<u8> = format!("{}", batch.len()).bytes().collect();
     assert_eq!(result, expected);
 
     for (i, val) in batch.iter().enumerate() {
-        let code = format!("process.stdout.write(String((await core.get({i}))));");
+        let code = format!("output(String((await core.get({i}))));");
         let stdout = repl.run(&code).await?;
         assert_eq!(stdout, *val);
     }
 
     // stop the repl. When repl is stopped hypercore & socket are closed
     let _ = repl.stop().await?;
-
-    // ensure js process closes properly
-    assert_eq!(repl.child.output().await?.status.code(), Some(0));
     Ok(())
 }
 
@@ -177,7 +173,7 @@ await new Promise(r => setTimeout(r, 1e2))
         )
         .await?;
     let stdout = repl
-        .run("process.stdout.write(String((await core.info()).length));")
+        .run("output(String((await core.info()).length));")
         .await?;
     assert_eq!(stdout, b"3");
 
@@ -189,20 +185,19 @@ await new Promise(r => setTimeout(r, 1e2))
                 "
 await core.update({wait: true});
 await new Promise(r => setTimeout(r, 1e2))
-process.stdout.write(String((await core.info()).length));",
+output(String((await core.info()).length));",
             )
             .await?;
         let len: Vec<u8> = format!("{}", new_size + 1).bytes().collect();
         assert_eq!(stdout, len);
 
-        let code = format!("process.stdout.write(String((await core.get({new_size}))));");
+        let code = format!("output(String((await core.get({new_size}))));");
         let stdout = repl.run(&code).await?;
         assert_eq!(stdout, &[l]);
     }
 
     // stop the repl. When repl is stopped hypercore & socket are closed
     let _ = repl.stop().await?;
-    let _ = repl.child.output().await?;
     Ok(())
 }
 
