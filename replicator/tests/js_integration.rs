@@ -6,9 +6,11 @@ use hypercore::{
     PartialKeypair, VerifyingKey,
     replication::{CoreInfo, CoreMethods},
 };
+use hypercore_protocol::HandshakeResult;
 use macros::start_func_with;
 use tokio::{net::TcpListener, spawn};
 use tokio_util::compat::TokioAsyncReadCompatExt;
+use uint24le_framing::Uint24LELengthPrefixedFraming;
 use utils::ram_core;
 
 use rusty_nodejs_repl::{Config, Repl};
@@ -32,8 +34,12 @@ async fn rust_writer_js_reader<A: AsRef<[u8]>, B: AsRef<[A]>>(
 
     let replicating_core = core.clone();
     spawn(async move {
-        let stream = listener.accept().await?.0;
-        replicating_core.add_stream(stream.compat(), false).await;
+        let bytes = listener.accept().await?.0;
+        let stream = Uint24LELengthPrefixedFraming::new(bytes.compat());
+        let (stream, _errors) = stream.split_off_errors();
+        let hs2 = HandshakeResult::from_pre_encrypted(false, [2u8; 32], [3u8; 32], vec![]);
+        let fut = replicating_core.add_stream(stream, false, hs2);
+        fut.await;
         Ok::<(), std::io::Error>(())
     });
 
@@ -124,8 +130,12 @@ socket.pipe(core.replicate(false)).pipe(socket);
 
     let replicating_core = core.clone();
     spawn(async move {
-        let stream = listener.accept().await?.0;
-        replicating_core.add_stream(stream.compat(), true).await;
+        let bytes = listener.accept().await?.0;
+        let stream = Uint24LELengthPrefixedFraming::new(bytes.compat());
+        let (stream, _errors) = stream.split_off_errors();
+        let hs2 = HandshakeResult::from_pre_encrypted(false, [2u8; 32], [3u8; 32], vec![]);
+        let fut = replicating_core.add_stream(stream, true, hs2);
+        fut.await;
         Ok::<(), std::io::Error>(())
     });
 
@@ -142,6 +152,16 @@ async fn initial_rust_data_replicates_to_js() -> Result<()> {
     // print the length of the core so we can check it in rust
     let result = repl
         .run("output(String((await core.info()).length));")
+        .await?;
+
+    dbg!();
+    let result = repl
+        .run(
+            "
+            await core.update({wait: true});
+            output(String((await core.info()).length));
+            ",
+        )
         .await?;
 
     let expected: Vec<u8> = format!("{}", batch.len()).bytes().collect();
@@ -234,8 +254,12 @@ async fn make_js_slave_from_rs(
 
     let replicating_core = core.clone();
     spawn(async move {
-        let stream = listener.accept().await?.0;
-        replicating_core.add_stream(stream.compat(), false).await;
+        let bytes = listener.accept().await?.0;
+        let stream = Uint24LELengthPrefixedFraming::new(bytes.compat());
+        let (stream, _errors) = stream.split_off_errors();
+        let hs2 = HandshakeResult::from_pre_encrypted(false, [2u8; 32], [3u8; 32], vec![]);
+        let fut = replicating_core.add_stream(stream, false, hs2);
+        fut.await;
         Ok::<(), std::io::Error>(())
     });
     let k = core.key_pair().await;
