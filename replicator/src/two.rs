@@ -1,3 +1,4 @@
+#![expect(unused)]
 use std::{
     pin::{Pin, pin},
     sync::{Arc, RwLock},
