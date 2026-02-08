@@ -13,10 +13,7 @@ use hypercore::{
     replication::{CoreMethods, SharedCore},
 };
 use hypercore_protocol::HandshakeResult;
-use piper::{Reader, Writer, pipe};
 use tracing::error;
-
-static PIPE_CAPACITY: usize = 1024 * 1024 * 4;
 
 pub async fn public_key(core: &impl CoreMethods) -> PartialKeypair {
     let PartialKeypair { public, .. } = core.key_pair().await;
@@ -141,18 +138,18 @@ pub enum Error {
     Foo,
 }
 impl From<mpsc::SendError> for Error {
-    fn from(value: mpsc::SendError) -> Self {
+    fn from(_value: mpsc::SendError) -> Self {
         Self::Foo
     }
 }
 impl From<std::io::Error> for Error {
-    fn from(value: std::io::Error) -> Self {
+    fn from(_value: std::io::Error) -> Self {
         Self::Foo
     }
 }
 
 impl From<Error> for std::io::Error {
-    fn from(value: Error) -> Self {
+    fn from(_value: Error) -> Self {
         std::io::Error::new(std::io::ErrorKind::Other, "foo")
     }
 }
