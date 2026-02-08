@@ -21,7 +21,8 @@ pub mod utils;
 mod two;
 use std::{fmt::Debug, marker::Unpin, sync::Arc};
 
-use futures_lite::{AsyncRead, AsyncWrite, Future, StreamExt};
+use futures::Sink;
+use futures_lite::{Future, Stream, StreamExt};
 
 use thiserror::Error;
 use tracing::{debug, error, instrument, trace, warn};
@@ -31,16 +32,17 @@ use tokio::{spawn, sync::RwLock, task::JoinHandle};
 use bitfield::{Bitfield, DumbBitfield};
 
 use hypercore::{
-    Hypercore, HypercoreError, RequestBlock, RequestUpgrade,
+    Hypercore, HypercoreError,
     replication::{
         CoreInfo, CoreMethods, CoreMethodsError, ReplicationMethods, ReplicationMethodsError,
         SharedCore,
     },
 };
 use hypercore_protocol::{
-    Channel, Event, Key, Message, Protocol, ProtocolBuilder, discovery_key,
+    Channel, Event, HandshakeResult, Key, Message, Protocol, discovery_key,
     schema::{Data, Range, Request, Synchronize},
 };
+use hypercore_schema::{RequestBlock, RequestUpgrade};
 
 type ShareRw<T> = Arc<RwLock<T>>;
 
@@ -72,13 +74,13 @@ impl Replicate for SharedCore {
 
 #[async_trait::async_trait]
 /// TODO don't make this pub, just using in corestore
-pub trait ProtoMethods: Debug + Send + Sync {
+pub trait ProtoMethods: Debug {
     async fn open(&mut self, key: Key) -> std::io::Result<()>;
     async fn _next(&mut self) -> Option<std::io::Result<Event>>;
 }
 
 #[async_trait::async_trait]
-impl<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static> ProtoMethods for Protocol<S> {
+impl ProtoMethods for Protocol {
     async fn open(&mut self, key: Key) -> std::io::Result<()> {
         Protocol::open(self, key).await
     }
@@ -91,7 +93,7 @@ pub struct Peer {
     /// reference to the parent core
     core: SharedCore,
     /// stream of events to the peer
-    protocol: ShareRw<Box<dyn ProtoMethods>>,
+    protocol: ShareRw<Protocol>,
 }
 
 impl Debug for Peer {
@@ -105,7 +107,7 @@ impl Debug for Peer {
 }
 
 impl Peer {
-    fn new(core: SharedCore, protocol: ShareRw<Box<dyn ProtoMethods>>) -> Self {
+    fn new(core: SharedCore, protocol: ShareRw<Protocol>) -> Self {
         Self { core, protocol }
     }
 
@@ -117,7 +119,7 @@ impl Peer {
         while let Some(Ok(event)) = {
             // this block is just here to release the `.write()` lock
             #[allow(clippy::let_and_return)]
-            let p = protocol.write().await._next().await;
+            let p = protocol.write().await.next().await;
             p
         } {
             trace!("[is_initiator = {is_initiator}] Proto RX:\n\t{:#?}", event);
@@ -196,21 +198,21 @@ impl ReplicatingCore {
     pub async fn add_peer(
         &self,
         core: SharedCore,
-        protocol: Arc<RwLock<Box<dyn ProtoMethods>>>,
+        protocol: Arc<RwLock<Protocol>>,
     ) -> ShareRw<Peer> {
         let peer = Arc::new(RwLock::new(Peer::new(core, protocol)));
         self.peers.push(peer.clone()).await;
         peer
     }
 
-    pub async fn add_stream<S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static>(
-        &self,
-        stream: S,
-        is_initiator: bool,
-    ) {
+    pub async fn add_stream<S>(&self, stream: S, is_initiator: bool, handshake: HandshakeResult)
+    where
+        S: Stream<Item = Vec<u8>> + Sink<Vec<u8>> + Unpin + Send + Sync + 'static,
+        <S as Sink<Vec<u8>>>::Error: Into<std::io::Error>,
+    {
         let core = self.core.clone();
-        let protocol = ProtocolBuilder::new(is_initiator).connect(stream);
-        let protocol = Arc::new(RwLock::new(Box::new(protocol) as Box<dyn ProtoMethods>));
+        let protocol = Protocol::new(stream, is_initiator, handshake);
+        let protocol = Arc::new(RwLock::new(protocol));
         let peer = self.add_peer(core, protocol).await;
         spawn(async move {
             peer.read().await.start_message_loop(is_initiator).await?;
@@ -257,7 +259,7 @@ impl CoreMethods for ReplicatingCore {
 async fn initiate_sync(
     core: impl ReplicationMethods + Clone + 'static,
     peer_state: ShareRw<PeerState>,
-    channel: &mut Channel,
+    channel: &Channel,
 ) -> Result<(), ReplicatorError> {
     let info = core.info().await;
     if info.fork != peer_state.read().await.remote_fork {
@@ -329,7 +331,7 @@ mod handlers {
     use hypercore::replication::events::{DataUpgrade, Have};
 
     use super::*;
-    pub async fn have(mut channel: Channel, event: Have) -> Result<(), ReplicatorError> {
+    pub async fn have(channel: Channel, event: Have) -> Result<(), ReplicatorError> {
         channel
             .send(Message::Range(Range {
                 drop: event.drop,
@@ -342,7 +344,7 @@ mod handlers {
     pub async fn data_upgrade(
         core: impl ReplicationMethods + Clone + 'static,
         peer_state: ShareRw<PeerState>,
-        mut channel: Channel,
+        channel: Channel,
         _event: DataUpgrade,
     ) -> Result<(), ReplicatorError> {
         let info = core.info().await;
@@ -370,7 +372,7 @@ mod handlers {
     pub async fn get(
         core: impl ReplicationMethods,
         peer_state: ShareRw<PeerState>,
-        mut channel: Channel,
+        channel: Channel,
         index: u64,
     ) -> Result<(), ReplicatorError> {
         let ps_len = peer_state.read().await.remote_length;
@@ -401,9 +403,11 @@ peer_state.remote_bitfield({index}) == false"
             hash: None,
             seek: None,
             upgrade: None,
+            manifest: false,
+            priority: 42,
         });
 
-        channel.send_batch(&[msg]).await?;
+        channel.send(msg).await?;
         Ok(())
     }
 }
@@ -411,7 +415,7 @@ peer_state.remote_bitfield({index}) == false"
 pub async fn on_peer(core: SharedCore, mut channel: Channel) -> Result<(), ReplicatorError> {
     let peer_state = Arc::new(RwLock::new(PeerState::default()));
 
-    initiate_sync(core.clone(), peer_state.clone(), &mut channel).await?;
+    initiate_sync(core.clone(), peer_state.clone(), &channel).await?;
 
     let _core_event_loop = spawn(core_event_loop(
         core.clone(),
@@ -445,7 +449,7 @@ fn on_message(
 async fn on_message_inner(
     core: impl ReplicationMethods,
     peer_state: ShareRw<PeerState>,
-    mut channel: Channel,
+    channel: Channel,
     message: Message,
 ) -> Result<(), ReplicatorError> {
     trace!("RX:{:?}", message);
@@ -500,6 +504,8 @@ async fn on_message_inner(
                         start: info.length,
                         length: peer_state.read().await.remote_length - info.length,
                     }),
+                    manifest: false,
+                    priority: 42,
                 };
 
                 messages.push(Message::Request(msg));

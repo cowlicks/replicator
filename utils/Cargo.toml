@@ -13,8 +13,8 @@ tokio = { version = "1.37.0", features = ["sync"] }
 futures = "0.3"
 
 [dependencies.hypercore]
-features = ["sparse", "tokio"]
-version = "0.14.0"
-#path = "../core"
+features = ["sparse", "tokio", "shared-core"]
+#version = "0.15.0"
+path = "../../core"
 #git = "https://github.com/cowlicks/hypercore.git"
 #branch = "replication"
