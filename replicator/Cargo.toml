@@ -23,16 +23,19 @@ derive_builder = "0.20.0"
 [dependencies.bitfield]
 path = "../bitfield"
 
+[dependencies.hypercore_schema]
+version = "0.2.0"
+
 [dependencies.hypercore]
 features = ["sparse", "cache", "shared-core"]
-version = "0.14.0"
-#path = "../../core"
+#version = "0.15.0"
+path = "../../core"
 
 [dependencies.hypercore-protocol]
-version = "0.6.1"
+#version = "0.6.1"
 default-features = false
 features = ["sparse", "cache", "tokio"]
-#path = "../../protocol"
+path = "../../protocol"
 
 [dev-dependencies]
 async-process = "2.2.1"
@@ -43,6 +46,9 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 utils = { path = "../utils" }
 macros = { path = "../macros" }
 random-access-memory = "3.0.0"
-rusty_nodejs_repl = "0.3"
+rusty_nodejs_repl = { path = "../../js-repl-rs" }
 data-encoding = "2.6.0"
 tokio-util = { version = "0.7.11", features = ["compat"] }
+
+[dev-dependencies.uint24le_framing]
+path = "../../framing"
