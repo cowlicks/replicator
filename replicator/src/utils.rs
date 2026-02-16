@@ -12,8 +12,13 @@ use hypercore::{
     HypercoreBuilder, PartialKeypair, Storage, generate_signing_key,
     replication::{CoreMethods, SharedCore},
 };
-use hypercore_protocol::HandshakeResult;
+use hypercore_handshake::{
+    Cipher,
+    state_machine::{SecStream, hc_specific::generate_keypair},
+};
+use tokio_util::compat::TokioAsyncReadCompatExt;
 use tracing::error;
+use uint24le_framing::Uint24LELengthPrefixedFraming;
 
 pub async fn public_key(core: &impl CoreMethods) -> PartialKeypair {
     let PartialKeypair { public, .. } = core.key_pair().await;
@@ -57,14 +62,37 @@ pub async fn make_connected_slave(
         .await?
         .into();
 
-    let (a_b, b_a) = Duplex::pair();
+    let (a_b, b_a) = tokio::io::duplex(10_000);
+    let a_b = Uint24LELengthPrefixedFraming::new(a_b.compat());
+    let b_a = Uint24LELengthPrefixedFraming::new(b_a.compat());
 
-    let fake_hash = vec![4u8; 64];
+    let mkey = generate_keypair().unwrap();
+    let master_stream = if master_is_initiator {
+        Cipher::new(
+            Some(Box::new(a_b)),
+            SecStream::new_initiator_xx(&[]).unwrap().into(),
+        )
+    } else {
+        Cipher::new(
+            Some(Box::new(a_b)),
+            SecStream::new_responder_xx(&mkey, &[]).unwrap().into(),
+        )
+    };
 
-    let hs1 = HandshakeResult::from_pre_encrypted(true, [3u8; 32], [2u8; 32], fake_hash.clone());
-    let hs2 = HandshakeResult::from_pre_encrypted(false, [2u8; 32], [3u8; 32], fake_hash);
-    master.add_stream(a_b, master_is_initiator, hs1).await;
-    slave.add_stream(b_a, !master_is_initiator, hs2).await;
+    let skey = generate_keypair().unwrap();
+    let slave_stream = if !master_is_initiator {
+        Cipher::new(
+            Some(Box::new(b_a)),
+            SecStream::new_initiator_xx(&[]).unwrap().into(),
+        )
+    } else {
+        Cipher::new(
+            Some(Box::new(b_a)),
+            SecStream::new_responder_xx(&skey, &[]).unwrap().into(),
+        )
+    };
+    master.add_stream(master_stream, master_is_initiator).await;
+    slave.add_stream(slave_stream, !master_is_initiator).await;
 
     Ok(slave)
 }
@@ -92,18 +120,25 @@ pub async fn create_connected_cores<A: AsRef<[u8]>, B: AsRef<[A]>>(
         .await
         .unwrap();
 
-    dbg!();
-    let (a_b, b_a) = Duplex::pair();
+    let (a_b, b_a) = tokio::io::duplex(10_000);
+    let a_b = Uint24LELengthPrefixedFraming::new(a_b.compat());
+    let b_a = Uint24LELengthPrefixedFraming::new(b_a.compat());
+
+    let server_stream = Cipher::new(
+        Some(Box::new(a_b)),
+        SecStream::new_initiator_xx(&[]).unwrap().into(),
+    );
+
+    let client_stream = Cipher::new(
+        Some(Box::new(b_a)),
+        SecStream::new_initiator_xx(&[]).unwrap().into(),
+    );
+
     let server_replicator = writer_core.clone().replicate();
     let client_replicator = reader_core.clone().replicate();
 
-    let fake_hash = vec![4u8; 64];
-    let hs1 = HandshakeResult::from_pre_encrypted(true, [3u8; 32], [2u8; 32], fake_hash.clone());
-    let hs2 = HandshakeResult::from_pre_encrypted(false, [2u8; 32], [3u8; 32], fake_hash);
-    server_replicator.add_stream(a_b, true, hs1).await;
-    dbg!();
-    client_replicator.add_stream(b_a, false, hs2).await;
-    dbg!();
+    server_replicator.add_stream(server_stream, true).await;
+    client_replicator.add_stream(client_stream, false).await;
 
     (
         (writer_core, server_replicator),
@@ -150,7 +185,7 @@ impl From<std::io::Error> for Error {
 
 impl From<Error> for std::io::Error {
     fn from(_value: Error) -> Self {
-        std::io::Error::new(std::io::ErrorKind::Other, "foo")
+        std::io::Error::other("foo")
     }
 }
 impl Sink<Vec<u8>> for Duplex {
