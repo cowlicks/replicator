@@ -5,12 +5,11 @@ use hypercore::{
     HypercoreBuilder, Storage,
     replication::{CoreInfo, CoreMethods},
 };
-use hypercore_protocol::HandshakeResult;
-use tracing::{info, trace};
+use tracing::info;
 
 use crate::{
     ReplicatingCore, ReplicatorError,
-    utils::{Duplex, create_connected_cores, make_connected_slave, public_key},
+    utils::{create_connected_cores, make_connected_slave},
 };
 
 const DEFAULT_MILLIS: u64 = 100;

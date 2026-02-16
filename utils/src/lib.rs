@@ -1,16 +1,8 @@
-use std::{
-    pin::Pin,
-    sync::{
-        OnceLock,
-        atomic::{AtomicU64, Ordering},
-    },
-    task::{Context, Poll},
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicU64, Ordering},
 };
 
-use futures::{
-    Sink, Stream,
-    channel::mpsc::{self, UnboundedReceiver, UnboundedSender},
-};
 use hypercore::{
     HypercoreBuilder, PartialKeypair, Storage, generate_signing_key, replication::SharedCore,
 };
@@ -36,7 +28,7 @@ pub async fn ram_core(key: Option<&PartialKeypair>) -> SharedCore {
 }
 
 pub fn log() {
-    use tracing_subscriber::fmt::format::FmtSpan;
+    //use tracing_subscriber::fmt::format::FmtSpan;
     static START_LOGS: OnceLock<()> = OnceLock::new();
     START_LOGS.get_or_init(|| {
         tracing_subscriber::fmt()
