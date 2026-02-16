@@ -18,12 +18,11 @@ mod test;
 #[cfg(any(test, feature = "utils"))]
 pub mod utils;
 
-mod two;
-use std::{fmt::Debug, marker::Unpin, sync::Arc};
+use std::{fmt::Debug, sync::Arc};
 
-use futures::Sink;
-use futures_lite::{Future, Stream, StreamExt};
+use futures_lite::{Future, StreamExt};
 
+use hypercore_handshake::Cipher;
 use thiserror::Error;
 use tracing::{debug, error, instrument, trace, warn};
 
@@ -39,7 +38,7 @@ use hypercore::{
     },
 };
 use hypercore_protocol::{
-    Channel, Event, HandshakeResult, Key, Message, Protocol, discovery_key,
+    Channel, Event, Key, Message, Protocol, discovery_key,
     schema::{Data, Range, Request, Synchronize},
 };
 use hypercore_schema::{RequestBlock, RequestUpgrade};
@@ -205,13 +204,9 @@ impl ReplicatingCore {
         peer
     }
 
-    pub async fn add_stream<S>(&self, stream: S, is_initiator: bool, handshake: HandshakeResult)
-    where
-        S: Stream<Item = Vec<u8>> + Sink<Vec<u8>> + Unpin + Send + Sync + 'static,
-        <S as Sink<Vec<u8>>>::Error: Into<std::io::Error>,
-    {
+    pub async fn add_stream(&self, stream: Cipher, is_initiator: bool) {
         let core = self.core.clone();
-        let protocol = Protocol::new(stream, is_initiator, handshake);
+        let protocol = Protocol::new(Box::new(stream), is_initiator);
         let protocol = Arc::new(RwLock::new(protocol));
         let peer = self.add_peer(core, protocol).await;
         spawn(async move {
