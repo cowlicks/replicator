@@ -11,10 +11,10 @@ use hypercore_handshake::{
     state_machine::{SecStream, hc_specific},
 };
 use macros::start_func_with;
+use replicator_utils::ram_core;
 use tokio::{net::TcpListener, spawn};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use uint24le_framing::Uint24LELengthPrefixedFraming;
-use utils::ram_core;
 
 use rusty_nodejs_repl::{Config, Repl};
 
