@@ -1,13 +1,4 @@
-use std::{
-    pin::Pin,
-    task::{Context, Poll},
-};
-
 use crate::{Replicate, ReplicatingCore, ReplicatorError};
-use futures::{
-    Sink, Stream,
-    channel::mpsc::{self, UnboundedReceiver, UnboundedSender},
-};
 use hypercore::{
     HypercoreBuilder, PartialKeypair, Storage, generate_signing_key,
     replication::{CoreMethods, SharedCore},
@@ -17,7 +8,6 @@ use hypercore_handshake::{
     state_machine::{SecStream, hc_specific::generate_keypair},
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
-use tracing::error;
 use uint24le_framing::Uint24LELengthPrefixedFraming;
 
 pub async fn public_key(core: &impl CoreMethods) -> PartialKeypair {
@@ -165,84 +155,4 @@ pub async fn create_connected_cores<A: AsRef<[u8]>, B: AsRef<[A]>>(
         (writer_core, server_replicator),
         (reader_core, client_replicator),
     )
-}
-
-/// A duplex Stream/Sink for testing, connected to a peer via channels.
-pub struct Duplex {
-    rx: UnboundedReceiver<Vec<u8>>,
-    tx: UnboundedSender<Vec<u8>>,
-}
-
-impl Duplex {
-    pub fn pair() -> (Self, Self) {
-        let (tx_a, rx_a) = mpsc::unbounded();
-        let (tx_b, rx_b) = mpsc::unbounded();
-        (Duplex { rx: rx_a, tx: tx_b }, Duplex { rx: rx_b, tx: tx_a })
-    }
-}
-
-impl Stream for Duplex {
-    type Item = Vec<u8>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.rx).poll_next(cx)
-    }
-}
-
-#[derive(Debug)]
-pub enum Error {
-    Foo,
-}
-impl From<mpsc::SendError> for Error {
-    fn from(_value: mpsc::SendError) -> Self {
-        Self::Foo
-    }
-}
-impl From<std::io::Error> for Error {
-    fn from(_value: std::io::Error) -> Self {
-        Self::Foo
-    }
-}
-
-impl From<Error> for std::io::Error {
-    fn from(_value: Error) -> Self {
-        std::io::Error::other("foo")
-    }
-}
-impl Sink<Vec<u8>> for Duplex {
-    type Error = Error;
-
-    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Pin::new(&self.tx).poll_ready(_cx).map_err(|_e| {
-            error!("poll_ready error: {_e:?}");
-            Error::Foo
-        })
-    }
-
-    fn start_send(mut self: Pin<&mut Self>, item: Vec<u8>) -> Result<(), Self::Error> {
-        Pin::new(&mut self.tx).start_send(item).map_err(|_e| {
-            error!("start_send error: {_e:?}");
-            Error::Foo
-        })
-    }
-
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Result<(), Self::Error>> {
-        Pin::new(&mut self.tx).poll_flush(_cx).map_err(|_e| {
-            error!("poll_flush error: {_e:?}");
-            Error::Foo
-        })
-    }
-
-    fn poll_close(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Result<(), Self::Error>> {
-        Pin::new(&mut self.tx).poll_close(_cx).map_err(|_e| {
-            error!("poll_close error: {_e:?}");
-            Error::Foo
-        })
-    }
 }
