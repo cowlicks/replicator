@@ -19,6 +19,13 @@ async-channel = "1"
 async-trait = "0.1.81"
 piper = { version = "0.2.1", optional = true }
 derive_builder = "0.20.0"
+tokio-util = { version =  "0.7.18", features = ["compat"]}
+
+[dependencies.hypercore_handshake]
+path = "../../handshake"
+
+[dependencies.uint24le_framing]
+path = "../../framing"
 
 [dependencies.bitfield]
 path = "../bitfield"
@@ -46,9 +53,6 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 utils = { path = "../utils" }
 macros = { path = "../macros" }
 random-access-memory = "3.0.0"
-rusty_nodejs_repl = { path = "../../js-repl-rs" }
+rusty_nodejs_repl = { path = "../../js-repl-rs", features = ["integration_utils"] }
 data-encoding = "2.6.0"
 tokio-util = { version = "0.7.11", features = ["compat"] }
-
-[dev-dependencies.uint24le_framing]
-path = "../../framing"
