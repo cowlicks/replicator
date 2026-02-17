@@ -22,7 +22,7 @@ use std::{fmt::Debug, sync::Arc};
 
 use futures_lite::{Future, StreamExt};
 
-use hypercore_handshake::Cipher;
+use hypercore_handshake::CipherTrait;
 use thiserror::Error;
 use tracing::{debug, error, instrument, trace, warn};
 
@@ -204,7 +204,7 @@ impl ReplicatingCore {
         peer
     }
 
-    pub async fn add_stream(&self, stream: Cipher, is_initiator: bool) {
+    pub async fn add_stream(&self, stream: impl CipherTrait + 'static, is_initiator: bool) {
         let core = self.core.clone();
         let protocol = Protocol::new(Box::new(stream), is_initiator);
         let protocol = Arc::new(RwLock::new(protocol));
