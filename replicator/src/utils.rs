@@ -1,13 +1,14 @@
 use crate::{Replicate, ReplicatingCore, ReplicatorError};
 use hypercore::{
-    generate_signing_key,
+    HypercoreBuilder, PartialKeypair, Storage, generate_signing_key,
     replication::{CoreMethods, SharedCore},
-    HypercoreBuilder, PartialKeypair, Storage,
 };
-use hypercore_protocol::Duplex;
-use piper::{pipe, Reader, Writer};
-
-static PIPE_CAPACITY: usize = 1024 * 1024 * 4;
+use hypercore_handshake::{
+    Cipher,
+    state_machine::{SecStream, hc_specific::generate_keypair},
+};
+use tokio_util::compat::TokioAsyncReadCompatExt;
+use uint24le_framing::Uint24LELengthPrefixedFraming;
 
 pub async fn public_key(core: &impl CoreMethods) -> PartialKeypair {
     let PartialKeypair { public, .. } = core.key_pair().await;
@@ -26,16 +27,6 @@ pub fn make_reader_and_writer_keys() -> (PartialKeypair, PartialKeypair) {
     let mut reader_key = writer_key.clone();
     reader_key.secret = None;
     (reader_key, writer_key)
-}
-
-type S = Duplex<Reader, Writer>;
-pub fn create_connected_streams() -> (S, S) {
-    let (read_from_a, write_to_a) = pipe(PIPE_CAPACITY);
-    let (read_from_b, write_to_b) = pipe(PIPE_CAPACITY);
-
-    let stream_to_b = Duplex::new(read_from_a, write_to_b);
-    let stream_to_a = Duplex::new(read_from_b, write_to_a);
-    (stream_to_a, stream_to_b)
 }
 
 pub async fn make_slave(master: &SharedCore) -> Result<SharedCore, ReplicatorError> {
@@ -61,10 +52,37 @@ pub async fn make_connected_slave(
         .await?
         .into();
 
-    let (a_b, b_a) = create_connected_streams();
+    let (a_b, b_a) = tokio::io::duplex(10_000);
+    let a_b = Uint24LELengthPrefixedFraming::new(a_b.compat());
+    let b_a = Uint24LELengthPrefixedFraming::new(b_a.compat());
 
-    master.add_stream(a_b, master_is_initiator).await;
-    slave.add_stream(b_a, !master_is_initiator).await;
+    let mkey = generate_keypair().unwrap();
+    let master_stream = if master_is_initiator {
+        Cipher::new(
+            Some(Box::new(a_b)),
+            SecStream::new_initiator_xx(&[]).unwrap().into(),
+        )
+    } else {
+        Cipher::new(
+            Some(Box::new(a_b)),
+            SecStream::new_responder_xx(&mkey, &[]).unwrap().into(),
+        )
+    };
+
+    let skey = generate_keypair().unwrap();
+    let slave_stream = if !master_is_initiator {
+        Cipher::new(
+            Some(Box::new(b_a)),
+            SecStream::new_initiator_xx(&[]).unwrap().into(),
+        )
+    } else {
+        Cipher::new(
+            Some(Box::new(b_a)),
+            SecStream::new_responder_xx(&skey, &[]).unwrap().into(),
+        )
+    };
+    master.add_stream(master_stream, master_is_initiator).await;
+    slave.add_stream(slave_stream, !master_is_initiator).await;
 
     Ok(slave)
 }
@@ -92,12 +110,46 @@ pub async fn create_connected_cores<A: AsRef<[u8]>, B: AsRef<[A]>>(
         .await
         .unwrap();
 
-    let (a_b, b_a) = create_connected_streams();
+    let server_is_initiator = true;
+    let (a_b, b_a) = tokio::io::duplex(10_000);
+    let a_b = Uint24LELengthPrefixedFraming::new(a_b.compat());
+    let b_a = Uint24LELengthPrefixedFraming::new(b_a.compat());
+
+    let server_stream = if server_is_initiator {
+        Cipher::new(
+            Some(Box::new(a_b)),
+            SecStream::new_initiator_xx(&[]).unwrap().into(),
+        )
+    } else {
+        let server_key = generate_keypair().unwrap();
+        Cipher::new(
+            Some(Box::new(a_b)),
+            SecStream::new_responder_xx(&server_key, &[])
+                .unwrap()
+                .into(),
+        )
+    };
+
+    let client_stream = if !server_is_initiator {
+        Cipher::new(
+            Some(Box::new(b_a)),
+            SecStream::new_initiator_xx(&[]).unwrap().into(),
+        )
+    } else {
+        let client_key = generate_keypair().unwrap();
+        Cipher::new(
+            Some(Box::new(b_a)),
+            SecStream::new_responder_xx(&client_key, &[])
+                .unwrap()
+                .into(),
+        )
+    };
+
     let server_replicator = writer_core.clone().replicate();
     let client_replicator = reader_core.clone().replicate();
 
-    server_replicator.add_stream(a_b, true).await;
-    client_replicator.add_stream(b_a, false).await;
+    server_replicator.add_stream(server_stream, true).await;
+    client_replicator.add_stream(client_stream, false).await;
 
     (
         (writer_core, server_replicator),

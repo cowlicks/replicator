@@ -1,12 +1,15 @@
 #![allow(unused_variables)]
 use std::time::Duration;
 
-use hypercore::{HypercoreBuilder, Storage};
+use hypercore::{
+    HypercoreBuilder, Storage,
+    replication::{CoreInfo, CoreMethods},
+};
 use tracing::info;
 
 use crate::{
+    ReplicatingCore, ReplicatorError,
     utils::{create_connected_cores, make_connected_slave},
-    *,
 };
 
 const DEFAULT_MILLIS: u64 = 100;
@@ -106,7 +109,7 @@ async fn append_many_foreach_reader_update_reader_get() -> Result<(), Replicator
     Ok(())
 }
 
-const MAX_LOOPS: usize = 10;
+const MAX_LOOPS: usize = 5;
 macro_rules! assert_core_get {
     ($core:tt, $block_index:expr, $expected:expr) => {
         let mut i = 0;
