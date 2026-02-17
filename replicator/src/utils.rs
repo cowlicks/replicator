@@ -120,19 +120,40 @@ pub async fn create_connected_cores<A: AsRef<[u8]>, B: AsRef<[A]>>(
         .await
         .unwrap();
 
+    let server_is_initiator = true;
     let (a_b, b_a) = tokio::io::duplex(10_000);
     let a_b = Uint24LELengthPrefixedFraming::new(a_b.compat());
     let b_a = Uint24LELengthPrefixedFraming::new(b_a.compat());
 
-    let server_stream = Cipher::new(
-        Some(Box::new(a_b)),
-        SecStream::new_initiator_xx(&[]).unwrap().into(),
-    );
+    let server_stream = if server_is_initiator {
+        Cipher::new(
+            Some(Box::new(a_b)),
+            SecStream::new_initiator_xx(&[]).unwrap().into(),
+        )
+    } else {
+        let server_key = generate_keypair().unwrap();
+        Cipher::new(
+            Some(Box::new(a_b)),
+            SecStream::new_responder_xx(&server_key, &[])
+                .unwrap()
+                .into(),
+        )
+    };
 
-    let client_stream = Cipher::new(
-        Some(Box::new(b_a)),
-        SecStream::new_initiator_xx(&[]).unwrap().into(),
-    );
+    let client_stream = if !server_is_initiator {
+        Cipher::new(
+            Some(Box::new(b_a)),
+            SecStream::new_initiator_xx(&[]).unwrap().into(),
+        )
+    } else {
+        let client_key = generate_keypair().unwrap();
+        Cipher::new(
+            Some(Box::new(b_a)),
+            SecStream::new_responder_xx(&client_key, &[])
+                .unwrap()
+                .into(),
+        )
+    };
 
     let server_replicator = writer_core.clone().replicate();
     let client_replicator = reader_core.clone().replicate();
