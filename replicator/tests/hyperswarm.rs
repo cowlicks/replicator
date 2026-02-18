@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use hypercore::{HypercoreBuilder, PartialKeypair, Storage};
 use hypercore::replication::{CoreInfo, CoreMethods, SharedCore};
+use hypercore::{HypercoreBuilder, PartialKeypair, Storage};
 use hyperswarm::{DhtConfig, JoinOpts, Swarm, Topic};
 use replicator::Replicate;
 use test_utils::{Result, Testnet};
@@ -41,7 +41,10 @@ async fn rust_to_rust_replication_through_hyperswarm() -> Result<()> {
 
     // Reader uses the same public key but no secret (read-only)
     let writer_keypair = writer_core.key_pair().await;
-    let reader_keypair = PartialKeypair { public: writer_keypair.public, secret: None };
+    let reader_keypair = PartialKeypair {
+        public: writer_keypair.public,
+        secret: None,
+    };
     let reader_core: SharedCore = HypercoreBuilder::new(Storage::new_memory().await?)
         .key_pair(reader_keypair)
         .build()
@@ -71,16 +74,13 @@ async fn rust_to_rust_replication_through_hyperswarm() -> Result<()> {
     //
     // The hypercore protocol initiator is the one who opens the channel first.
     // The hyperswarm server-side connection has conn_event.client == false, so
-    // is_initiator = !conn_event.client gives true for the server (matching
-    // the convention used in the existing replicator tests).
     let server_task = tokio::spawn(async move {
         let conn_event = timeout!(server_conns.next(), 5000)
             .expect("timed out waiting for server connection")
             .expect("server connection stream ended")
             .expect("server connection error");
 
-        let is_initiator = !conn_event.client;
-        writer_replicator.add_stream(conn_event.connection, is_initiator).await;
+        writer_replicator.add_stream(conn_event.connection).await;
 
         // Keep the task alive long enough for replication to complete
         wait!(1000);
@@ -92,8 +92,7 @@ async fn rust_to_rust_replication_through_hyperswarm() -> Result<()> {
             .expect("client connection stream ended")
             .expect("client connection error");
 
-        let is_initiator = !conn_event.client;
-        reader_replicator.add_stream(conn_event.connection, is_initiator).await;
+        reader_replicator.add_stream(conn_event.connection).await;
 
         // Poll until the block arrives
         loop {

@@ -81,8 +81,8 @@ pub async fn make_connected_slave(
             SecStream::new_responder_xx(&skey, &[]).unwrap().into(),
         )
     };
-    master.add_stream(master_stream, master_is_initiator).await;
-    slave.add_stream(slave_stream, !master_is_initiator).await;
+    master.add_stream(master_stream).await;
+    slave.add_stream(slave_stream).await;
 
     Ok(slave)
 }
@@ -148,8 +148,8 @@ pub async fn create_connected_cores<A: AsRef<[u8]>, B: AsRef<[A]>>(
     let server_replicator = writer_core.clone().replicate();
     let client_replicator = reader_core.clone().replicate();
 
-    server_replicator.add_stream(server_stream, true).await;
-    client_replicator.add_stream(client_stream, false).await;
+    server_replicator.add_stream(server_stream).await;
+    client_replicator.add_stream(client_stream).await;
 
     (
         (writer_core, server_replicator),

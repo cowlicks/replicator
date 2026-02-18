@@ -204,9 +204,10 @@ impl ReplicatingCore {
         peer
     }
 
-    pub async fn add_stream(&self, stream: impl CipherTrait + 'static, is_initiator: bool) {
+    pub async fn add_stream(&self, stream: impl CipherTrait + 'static) {
         let core = self.core.clone();
-        let protocol = Protocol::new(Box::new(stream), is_initiator);
+        let is_initiator = stream.is_initiator();
+        let protocol = Protocol::new(Box::new(stream));
         let protocol = Arc::new(RwLock::new(protocol));
         let peer = self.add_peer(core, protocol).await;
         spawn(async move {
