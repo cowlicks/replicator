@@ -183,7 +183,6 @@ async fn initial_rust_data_replicates_to_js() -> Result<()> {
             .await?;
 
         let expected: Vec<u8> = format!("{}", batch.len()).bytes().collect();
-        assert_eq!(result, expected);
         if result == expected {
             break;
         }

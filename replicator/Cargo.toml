@@ -22,10 +22,10 @@ derive_builder = "0.20.0"
 tokio-util = { version =  "0.7.18", features = ["compat"]}
 
 [dependencies.hypercore_handshake]
-path = "../../handshake"
+version = "0.6.0"
 
 [dependencies.uint24le_framing]
-path = "../../framing"
+version = "0.2.0"
 
 [dependencies.bitfield]
 path = "../bitfield"
@@ -50,9 +50,9 @@ piper = "0.2.1"
 serde_json = "1.0.116"
 tempfile = "3.10.1"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
-utils = { path = "../utils" }
+replicator_utils = { path = "../utils" }
 macros = { path = "../macros" }
 random-access-memory = "3.0.0"
-rusty_nodejs_repl = { path = "../../js-repl-rs", features = ["integration_utils"] }
+rusty_nodejs_repl = { version = "0.4.0", features = ["integration_utils"] }
 data-encoding = "2.6.0"
 tokio-util = { version = "0.7.11", features = ["compat"] }
