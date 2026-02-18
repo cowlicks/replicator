@@ -44,7 +44,7 @@ async fn rust_writer_js_reader<A: AsRef<[u8]>, B: AsRef<[A]>>(
             Some(Box::new(stream)),
             SecStream::new_responder_xx(&noise_kp, &[]).unwrap().into(),
         );
-        let fut = replicating_core.add_stream(cipher, false);
+        let fut = replicating_core.add_stream(cipher);
         fut.await;
         Ok::<(), std::io::Error>(())
     });
@@ -80,7 +80,7 @@ socket.pipe(core.replicate(true)).pipe(socket);
 
     let mut repl = conf.start().await?;
 
-    /// Add data to rust after repl sets up
+    // Add data to rust after repl sets up
     for b in batch.as_ref().iter() {
         core.append(b.as_ref()).await?;
     }
@@ -152,7 +152,7 @@ socket.pipe(core.replicate(false)).pipe(socket);
             Some(Box::new(stream)),
             SecStream::new_initiator_xx(&[]).unwrap().into(),
         );
-        let fut = replicating_core.add_stream(cipher, true);
+        let fut = replicating_core.add_stream(cipher);
         fut.await;
         Ok::<(), std::io::Error>(())
     });
@@ -289,7 +289,7 @@ async fn make_js_slave_from_rs(
             Some(Box::new(stream)),
             SecStream::new_responder_xx(&noise_kp, &[]).unwrap().into(),
         );
-        let fut = replicating_core.add_stream(cipher, false);
+        let fut = replicating_core.add_stream(cipher);
         fut.await;
         Ok::<(), std::io::Error>(())
     });
