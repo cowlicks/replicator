@@ -1,0 +1,20 @@
+{
+  "name": "gen_test_data",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "t": "node index.js"
+  },
+  "dependencies": {
+    "udx-native": "file:./udx-native",
+    "noise-curve-ed": "^2.0.0",
+    "dht-rpc": "file:./rpc",
+    "hyperdht": "file:./hyperdht",
+    "hyperswarm": "file:./hyperswarm",
+    "noise-handshake": "file:./noise-handshake",
+    "random-access-file": "^4.0.7",
+    "random-access-memory": "^6.2.1",
+    "sodium-native": "file:./sodium-native"
+  }
+}

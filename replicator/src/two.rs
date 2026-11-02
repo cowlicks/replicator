@@ -9,6 +9,7 @@ use bitfield::Bitfield;
 use futures::{Sink, Stream, stream::FuturesUnordered};
 use futures_lite::StreamExt;
 use hypercore::{Hypercore, PartialKeypair};
+use hypercore_handshake::Cipher;
 use hypercore_protocol::{
     Channel, DiscoveryKey, HandshakeResult, Message, Protocol, discovery_key,
     schema::{Range, Request, Synchronize},
@@ -230,12 +231,8 @@ pub struct Replicator {
     peers: Vec<Peer>,
 }
 impl Replicator {
-    pub fn add_stream<S>(&mut self, stream: S, is_initiator: bool, handshake: HandshakeResult)
-    where
-        S: Stream<Item = Vec<u8>> + Sink<Vec<u8>> + Unpin + Send + Sync + 'static,
-        <S as Sink<Vec<u8>>>::Error: Into<std::io::Error>,
-    {
-        let protocol = Protocol::new(stream, is_initiator, handshake);
+    pub fn add_stream(&mut self, stream: Cipher, is_initiator: bool, handshake: HandshakeResult) {
+        let protocol = Protocol::new(Box::new(stream));
         let keypair = self.core.key_pair();
         self.peers.push(Peer::new(keypair.clone(), protocol));
     }
